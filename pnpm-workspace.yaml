@@ -1,3 +1,6 @@
 allowBuilds:
   sharp: true
   unrs-resolver: true
+overrides:
+  # next pins postcss 8.4.31, which has open advisories; force the patched line
+  postcss: ">=8.5.23"
