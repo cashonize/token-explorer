@@ -35,10 +35,12 @@ BCMR is the metadata standard for CashTokens on BCH. It uses "authchains" (zerot
 ### BCMR Resolution
 
 `src/utils/bcmr.ts` is the explorer's own BCMR implementation (it replaced `@mainnet-cash/bcmr`):
-- `isBcmrOutput()` / `parseBcmrPublication()` - detect and decode publication outputs (`OP_RETURN <'BCMR'> <sha256> <uri>...`, any push encoding of the prefix; the legacy CID-only form is flagged `isCidOnly`)
-- `resolveBcmrUri()` - `ipfs://` via `IPFS_GATEWAY`, protocol-less URIs as HTTPS, bare domains to `/.well-known/bitcoin-cash-metadata-registry.json`; other protocols (e.g. `http://`) are skipped
+- `isBcmrOutput()` / `parseBcmrPublication()` - detect and decode publication outputs (`OP_RETURN <'BCMR'> <sha256> <uri>...`, prefix exactly `6a0442434d52` per spec). The non-spec mainnet-js form `OP_RETURN <'BCMR'> <utf8 IPFS CID>` is recognised and flagged `isCidOnly`; a spec hash-only publication (no URIs) has no fetchable URL
+- `resolveBcmrUri()` - `ipfs://` via `IPFS_GATEWAY`, protocol-less URIs (incl. `host:port/...`) as HTTPS, a domain without a path to `/.well-known/bitcoin-cash-metadata-registry.json`; other protocols (e.g. `http://`) are skipped
 - `resolveRegistry()` - fetches the registry once, checks the sha256 over the raw response bytes, parses JSON, selects the snapshot and Zod-validates it, returning structured diagnostics
-- `getCurrentSnapshot()` - picks the identity snapshot with the latest non-future timestamp (per spec), not the first key
+- `getCurrentSnapshot()` - per spec: the snapshot with the latest reached timestamp, or the oldest one if none is reached yet; first key only if no key is an ISO timestamp
+
+`fetchMetadata()` only resolves the **latest** metadata-update migration (from the tokenId tx onward). If that publication is malformed or has no fetchable URI it reports an `unresolvable_publication` diagnostic rather than falling back to an older registry.
 
 ### OTR (OpenTokenRegistry) Verification
 
@@ -54,9 +56,9 @@ For the schema definitions, see:
 
 ### Authchain History Timeline
 
-The `queryAuthchain()` Chaingraph query fetches the full authchain using the `migrations` field (ordered by `migration_index`). Each migration is classified as a "metadata update" or "identity transfer" by checking outputs for a BCMR OP_RETURN prefix (`isBcmrOutput()`: `6a0442434d52` or one of the PUSHDATA encodings of the "BCMR" push).
+The `queryAuthchain()` Chaingraph query fetches the full authchain using the `migrations` field (ordered by `migration_index`). Each migration is classified as a "metadata update" or "identity transfer" by checking outputs for the BCMR OP_RETURN prefix `6a0442434d52` (`isBcmrOutput()`).
 
-`parseAuthchainMigrations()` (in `queryChainGraph.ts`) turns the migrations into `AuthchainEntry[]` (txHash, timestamp, isMetadataUpdate, opReturnHex) with the decoded BCMR `publication` attached. The same parsed list feeds both `tokenInfo.authchainMigrations` (the timeline) and `fetchMetadata()` (the latest publication), so there is no second authchain query and no merge step. The `AuthchainTimeline` component in `AuthchainInfo.tsx` filters out pre-genesis migrations (from the funding tx) using the genesis txHash; `fetchMetadata()` counts publications over the unfiltered list.
+`parseAuthchainMigrations()` (in `queryChainGraph.ts`) turns the migrations into `AuthchainEntry[]` (txHash, timestamp, isMetadataUpdate, opReturnHex) with the decoded BCMR `publication` attached. The same parsed list feeds both `tokenInfo.authchainMigrations` (the timeline) and `fetchMetadata()` (the latest publication), so there is no second authchain query and no merge step. The `AuthchainTimeline` component in `AuthchainInfo.tsx` filters out pre-genesis migrations (from the funding tx) using the genesis txHash; `fetchMetadata()` drops only migrations before the tokenId tx (the authbase) and counts metadata updates from there.
 
 The `LatestPublicationOutput` component decodes the raw OP_RETURN hex from the latest metadata update migration into data pushes (protocol prefix, content hash, URIs) via `parseOpReturnPushes()`.
 
@@ -67,12 +69,12 @@ The app detects chipnet vs mainnet from the node name in the genesis transaction
 ### Verification Checks & Diagnostics
 
 - **BCMR schema validation** — Zod schemas in `src/utils/bcmrSchema.ts`
-- **Metadata hash match** — compares on-chain content hash with the sha256 of the fetched bytes (not checked for CID-only publications)
+- **Metadata hash match** — compares on-chain content hash with the sha256 of the fetched bytes (not checked for non-spec CID-only publications)
 - **BCMR origin match** — checks if the BCMR hosting domain matches the token's web URL
 - **OTR verification** — checks if tokenId is present in the OpenTokenRegistry
 - **Electrum UTXO verification** — cross-checks Chaingraph UTXOs against Electrum to detect stale data
 
-When verification fails or metadata can't be fetched, `resolveRegistry()` populates a `diagnostics` array on `MetadataInfo` with structured errors (type, message, details). Error classification is IPFS-aware. The `DiagnosticsSection` component renders these in an expandable details block.
+When verification fails or metadata can't be fetched, `fetchMetadata()` / `resolveRegistry()` populate a `diagnostics` array on `MetadataInfo` with structured errors (type, message, details). Error classification is IPFS-aware. The `DiagnosticsSection` component renders these in an expandable details block.
 
 ### Reserved & Circulating Supply
 

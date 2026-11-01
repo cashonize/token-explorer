@@ -51,7 +51,8 @@ function AuthchainTimeline({ entries, genesisTx, authHead, authHeadBurned }: { e
                 <details className="disclosure-inline">
                   <summary>BCMR details</summary>
                   <div style={{ marginLeft: '8px', fontSize: '0.9em', marginTop: '4px' }}>
-                    {publication.contentHash && <div style={{ wordBreak: 'break-all' }}>content hash: <span className="mono">{publication.contentHash}</span></div>}
+                    {publication.contentHash && !publication.isCidOnly && <div style={{ wordBreak: 'break-all' }}>content hash: <span className="mono">{publication.contentHash}</span></div>}
+                    {publication.isCidOnly && <div>no content hash (CID-only publication, a non-spec format)</div>}
                     {publication.httpsUrl && (
                       <div>https url:{' '}
                         <a href={publication.httpsUrl} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }}>
@@ -78,11 +79,8 @@ const diagnosticLabels: Record<string, string> = {
   http_error: 'HTTP Error',
   invalid_json: 'Invalid JSON',
   schema_invalid: 'Schema Invalid',
-  hash_mismatch: 'Hash Mismatch'
-}
-
-function hexToUtf8(hex: string): string {
-  return binToUtf8(hexToBin(hex))
+  hash_mismatch: 'Hash Mismatch',
+  unresolvable_publication: 'Unresolvable Publication'
 }
 
 function LatestPublicationOutput({ migrations, lastMetadataUpdateTimestamp }: {
@@ -126,7 +124,7 @@ function LatestPublicationOutput({ migrations, lastMetadataUpdateTimestamp }: {
               <strong>decoded:</strong>
               {pushes.map((push, i) => (
                 <div key={i} style={{ wordBreak: 'break-all', marginTop: '2px' }}>
-                  [{i}] {i === 1 ? `<${push.length / 2}_byte_hash>` : hexToUtf8(push)}
+                  [{i}] {i === 1 && !latestPublication.publication?.isCidOnly ? `<${push.length / 2}_byte_hash>` : binToUtf8(hexToBin(push))}
                 </div>
               ))}
             </div>

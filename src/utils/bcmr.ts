@@ -7,13 +7,12 @@ import type { Diagnostic, TokenMetadata } from '@/interfaces'
 // Covers what the explorer needs: decoding publication outputs, resolving their URIs,
 // fetching + hash-verifying the registry, and selecting the current identity snapshot.
 
-// OP_RETURN followed by a push of "BCMR" (42434d52), in each possible push encoding:
-// OP_PUSHBYTES_4, OP_PUSHDATA_1, OP_PUSHDATA_2, OP_PUSHDATA_4
-const BCMR_OUTPUT_PREFIXES = ['6a0442434d52', '6a4c0442434d52', '6a4d040042434d52', '6a4e0400000042434d52']
+// The spec defines a publication output as starting with exactly OP_RETURN OP_PUSHBYTES_4 'BCMR'
+const BCMR_OUTPUT_PREFIX = '6a0442434d52'
+const WELL_KNOWN_PATH = '/.well-known/bitcoin-cash-metadata-registry.json'
 
 export function isBcmrOutput(lockingBytecodeHex: string): boolean {
-  const hex = lockingBytecodeHex.toLowerCase()
-  return BCMR_OUTPUT_PREFIXES.some(prefix => hex.startsWith(prefix))
+  return lockingBytecodeHex.toLowerCase().startsWith(BCMR_OUTPUT_PREFIX)
 }
 
 /**
@@ -33,12 +32,16 @@ export function parseOpReturnPushes(lockingBytecodeHex: string): string[] {
 export interface BcmrPublication {
   /** sha256 of the registry content as committed on-chain (for a CID-only publication: the CID bytes) */
   contentHash: string
+  /** the URIs as published (for a CID-only publication: the derived ipfs:// URI) */
   uris: string[]
   /** HTTPS URL resolved from the first resolvable URI, or "" if none */
   httpsUrl: string
   /** the URI that httpsUrl was resolved from */
   resolvedUri: string
-  /** true for the legacy form without a hash: OP_RETURN <'BCMR'> <IPFS CID> */
+  /**
+   * true for the non-spec form OP_RETURN <'BCMR'> <IPFS CID> (a convention from mainnet-js):
+   * the push after 'BCMR' is a UTF-8 CID instead of a sha256, and there are no URI pushes
+   */
   isCidOnly: boolean
 }
 
@@ -46,20 +49,26 @@ export interface BcmrPublication {
  * Resolve a BCMR publication URI to an HTTPS URL, per the spec:
  * - ipfs://<cid> goes through the configured IPFS gateway
  * - URIs without a protocol are assumed to be HTTPS
- * - a bare domain resolves to its /.well-known/bitcoin-cash-metadata-registry.json
+ * - a domain without a path resolves to its /.well-known/bitcoin-cash-metadata-registry.json
  * Returns undefined for other protocols (e.g. http://), which can't be fetched safely.
  */
 export function resolveBcmrUri(uri: string, ipfsGateway: string = IPFS_GATEWAY): string | undefined {
-  if (uri.startsWith('ipfs://')) return ipfsGateway + uri.slice('ipfs://'.length)
-  if (uri.startsWith('https://')) return uri
-  if (/^[a-z][a-z0-9+.-]*:/i.test(uri)) return undefined
-  if (!uri.includes('/')) {
-    // a bare domain, except for an IPFS subdomain gateway host like <cid>.ipfs.<gateway>
-    const [firstLabel, secondLabel] = uri.toLowerCase().split('.')
-    const isIpfsSubdomainHost = firstLabel?.startsWith('baf') && secondLabel === 'ipfs'
-    if (!isIpfsSubdomainHost) return `https://${uri}/.well-known/bitcoin-cash-metadata-registry.json`
+  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(uri)?.[1]?.toLowerCase()
+  if (scheme === 'ipfs') return ipfsGateway + uri.slice('ipfs://'.length)
+  if (scheme !== undefined && scheme !== 'https') return undefined
+
+  let url: URL
+  try {
+    url = new URL(scheme ? uri : `https://${uri}`)
+  } catch {
+    return undefined
   }
-  return `https://${uri}`
+  const hasPath = url.pathname !== '/' || url.search !== '' || url.hash !== ''
+  // an IPFS subdomain gateway host like <cid>.ipfs.<gateway> serves the content at its root
+  const [firstLabel, secondLabel] = url.hostname.split('.')
+  const isIpfsSubdomainHost = firstLabel?.startsWith('baf') && secondLabel === 'ipfs'
+  if (!hasPath && !isIpfsSubdomainHost) return url.origin + WELL_KNOWN_PATH
+  return url.href
 }
 
 /**
@@ -72,9 +81,13 @@ export function parseBcmrPublication(lockingBytecodeHex: string): BcmrPublicatio
   const [, hashPush, ...uriPushes] = pushes
   if (hashPush === undefined) return undefined
 
-  const isCidOnly = uriPushes.length === 0
+  // A spec-conforming publication without URIs commits to a sha256 that is meant to be
+  // resolved by content addressing, which we can't do. mainnet-js-era tooling instead put
+  // a UTF-8 IPFS CID in this push; recognise that form so those registries still resolve.
+  const hashPushUtf8 = uriPushes.length === 0 ? binToUtf8(hexToBin(hashPush)) : ''
+  const isCidOnly = /^(baf[a-z2-7]{20,}|Qm[1-9A-HJ-NP-Za-km-z]{44})$/.test(hashPushUtf8)
   const uris = isCidOnly
-    ? [`ipfs://${binToUtf8(hexToBin(hashPush))}`]
+    ? [`ipfs://${hashPushUtf8}`]
     : uriPushes.map(push => binToUtf8(hexToBin(push)))
 
   let httpsUrl = ''
@@ -92,22 +105,21 @@ export function parseBcmrPublication(lockingBytecodeHex: string): BcmrPublicatio
 }
 
 /**
- * Select the current snapshot from an identity history: the one with the latest
- * timestamp that is not in the future. Falls back to the first listed snapshot when
- * no key is a valid past timestamp, so malformed registries still show something.
+ * Select the current snapshot from an identity history, per the spec: the one with the
+ * latest timestamp that has been reached; if none has been reached yet, the oldest one.
+ * Falls back to the first listed snapshot when no key is an ISO timestamp, so malformed
+ * registries still show something.
  */
 export function getCurrentSnapshot(identityHistory: Record<string, unknown>, now: number = Date.now()): unknown {
-  let latestTime = -Infinity
-  let latestKey: string | undefined
-  for (const key of Object.keys(identityHistory)) {
-    const time = Date.parse(key)
-    if (Number.isNaN(time) || time > now) continue
-    if (time > latestTime) {
-      latestTime = time
-      latestKey = key
-    }
-  }
-  const key = latestKey ?? Object.keys(identityHistory)[0]
+  const timestamps = Object.keys(identityHistory)
+    .filter(key => /^\d{4}-\d{2}-\d{2}(T|$)/.test(key))
+    .map(key => ({ key, time: Date.parse(key) }))
+    .filter(({ time }) => !Number.isNaN(time))
+  const reached = timestamps.filter(({ time }) => time <= now)
+  const pick = reached.length > 0
+    ? reached.reduce((a, b) => (b.time > a.time ? b : a))
+    : timestamps.reduce<typeof timestamps[number] | undefined>((a, b) => (!a || b.time < a.time ? b : a), undefined)
+  const key = pick?.key ?? Object.keys(identityHistory)[0]
   return key === undefined ? undefined : identityHistory[key]
 }
 

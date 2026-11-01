@@ -62,6 +62,7 @@ export type DiagnosticType =
   | 'invalid_json'      // Server returned non-JSON (HTML error page, Cloudflare challenge)
   | 'schema_invalid'    // Zod validation failed — detail lists specific issues
   | 'hash_mismatch'     // On-chain hash doesn't match fetched content
+  | 'unresolvable_publication' // Latest BCMR output is malformed or has no fetchable URI
 
 export interface Diagnostic {
   type: DiagnosticType

@@ -165,15 +165,28 @@ export default function Home() {
     let resolution: RegistryResolution = { diagnostics: [] }
 
     try {
-      const publications = parseAuthchainMigrations(await authchainPromise)
-        .flatMap(m => m.publication?.contentHash && m.publication.httpsUrl ? [m.publication] : [])
-      authchainUpdates = publications.length
+      const migrations = parseAuthchainMigrations(await authchainPromise)
+      // Chaingraph's authchain can start before the token's authbase (the tokenId tx); ignore those
+      const authbaseIndex = migrations.findIndex(m => m.txHash === tokenId)
+      const metadataUpdates = migrations.slice(Math.max(authbaseIndex, 0)).filter(m => m.isMetadataUpdate)
+      authchainUpdates = metadataUpdates.length
 
-      const latestPublication = publications.at(-1)
-      if (latestPublication) {
-        httpsUrl = latestPublication.httpsUrl
-        metaDataLocation = latestPublication.resolvedUri
-        resolution = await resolveRegistry(latestPublication, tokenId)
+      // Per spec only the latest publication counts: if it can't be used, don't fall back to an older registry
+      const latestUpdate = metadataUpdates.at(-1)
+      const publication = latestUpdate?.publication
+      if (publication?.httpsUrl) {
+        httpsUrl = publication.httpsUrl
+        metaDataLocation = publication.resolvedUri
+        resolution = await resolveRegistry(publication, tokenId)
+      } else if (latestUpdate) {
+        resolution.diagnostics.push({
+          type: 'unresolvable_publication',
+          message: publication
+            ? 'The latest BCMR publication has no URI the explorer can fetch (only https://, ipfs:// and protocol-less URIs are supported).'
+            : 'The latest BCMR publication output is malformed (it has no content hash push).',
+          details: `tx: ${latestUpdate.txHash}\noutput: ${latestUpdate.opReturnHex}` +
+            (publication?.uris.length ? `\nURIs: ${publication.uris.join(', ')}` : '')
+        })
       }
     } catch (error) {
       console.log(error)
