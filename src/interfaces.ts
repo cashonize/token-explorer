@@ -1,5 +1,6 @@
 import { z } from 'zod/v4'
 import { IdentitySnapshotSchema, NftCategorySchema } from './utils/bcmrSchema'
+import type { BcmrPublication } from './utils/bcmr'
 
 export type TokenMetadata = z.infer<typeof IdentitySnapshotSchema>
 export type NftCategory = z.infer<typeof NftCategorySchema>
@@ -8,10 +9,9 @@ export interface AuthchainEntry {
   txHash: string
   timestamp?: number
   isMetadataUpdate: boolean
-  contentHash?: string
-  httpsUrl?: string
-  uris?: string[]
   opReturnHex?: string
+  /** decoded BCMR publication output, if the migration has a well-formed one */
+  publication?: BcmrPublication
 }
 
 export interface ReservedSupplyUtxo {
@@ -62,6 +62,7 @@ export type DiagnosticType =
   | 'invalid_json'      // Server returned non-JSON (HTML error page, Cloudflare challenge)
   | 'schema_invalid'    // Zod validation failed — detail lists specific issues
   | 'hash_mismatch'     // On-chain hash doesn't match fetched content
+  | 'unresolvable_publication' // Latest BCMR output is malformed or has no fetchable URI
 
 export interface Diagnostic {
   type: DiagnosticType
@@ -91,6 +92,5 @@ export interface MetadataInfo {
   metadataHashMatch?: boolean
   isOtrVerified?: boolean
   isSchemaValid?: boolean
-  authchainHistory?: AuthchainEntry[]
   diagnostics?: Diagnostic[]
 }

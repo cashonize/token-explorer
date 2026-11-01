@@ -1,17 +1,25 @@
 import Head from 'next/head'
 import styles from '@/styles/Home.module.css'
-import { BCMR } from '@mainnet-cash/bcmr'
-import { utf8ToBin, sha256, binToHex, hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth'
+import { hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth'
 import React, { useEffect, useRef, useState } from 'react'
-import { queryGenesisInfo, queryIssuingUtxos, queryAuthchain, queryAllTokenHolders, queryGenesisCategories } from '../utils/queryChainGraph'
+import { queryGenesisInfo, queryIssuingUtxos, queryAuthchain, queryAllTokenHolders, queryGenesisCategories, parseAuthchainMigrations, type AuthchainQueryResult } from '../utils/queryChainGraph'
 import { countUniqueHolders, calculateTotalSupplyFT } from '../utils/calculations'
 import { checkOtrVerified } from '../utils/otrRegistry'
 import { sanitizeTokenId } from '../utils/utils'
-import { IdentitySnapshotSchema } from '../utils/bcmrSchema'
-import type { TokenInfo, ExtendedTokenInfo, MetadataInfo, TokenMetadata, AuthchainEntry, Diagnostic, ReservedSupplyUtxo, ElectrumVerification } from '@/interfaces'
-import { CHAINGRAPH_URL, IPFS_GATEWAY, EXAMPLE_TOKENS } from '@/constants'
+import { isBcmrOutput, resolveRegistry, type RegistryResolution } from '../utils/bcmr'
+import type { TokenInfo, ExtendedTokenInfo, MetadataInfo, ReservedSupplyUtxo, ElectrumVerification } from '@/interfaces'
+import { IPFS_GATEWAY, EXAMPLE_TOKENS } from '@/constants'
 import { verifySupplyViaElectrum } from '@/utils/queryElectrum'
 import { TokenSearch, MetadataDisplay, SupplyStats, AuthchainInfo, ThemeToggle } from '@/components'
+
+const QUERY_TIMEOUT_MS = 20_000
+const withTimeout = <T,>(p: Promise<T>, label: string): Promise<T> =>
+  Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
+    )
+  ])
 
 export default function Home() {
   const [tokenId, setTokenId] = useState<string>("")
@@ -84,8 +92,10 @@ export default function Home() {
     const metadataReadyPromise = new Promise<void>(resolve => {
       metadataReadyRef.current = { resolve }
     })
-    lookUpTokenData(id, metadataReadyPromise)
-    fetchMetadata(id)
+    // One authchain query feeds both the token info and the BCMR metadata resolution
+    const authchainPromise = withTimeout(queryAuthchain(id), 'queryAuthchain')
+    lookUpTokenData(id, authchainPromise, metadataReadyPromise)
+    fetchMetadata(id, authchainPromise)
     checkOtrStatus(id)
     const params = new URLSearchParams(window.location.search)
     params.set("tokenId", id)
@@ -148,168 +158,55 @@ export default function Home() {
     setMetadataInfo(prev => prev ? { ...prev, isOtrVerified } : { isOtrVerified })
   }
 
-  async function fetchMetadata(tokenId: string) {
-    let tokenMetadataResult: TokenMetadata | undefined
+  async function fetchMetadata(tokenId: string, authchainPromise: Promise<AuthchainQueryResult>) {
     let metaDataLocation = ""
     let httpsUrl: string | undefined
     let authchainUpdates = 0
-    let metadataHashMatch: boolean | undefined = undefined
-    let isSchemaValid: boolean | undefined = undefined
-    let authchainHistory: AuthchainEntry[] | undefined = undefined
-    const diagnostics: Diagnostic[] = []
+    let resolution: RegistryResolution = { diagnostics: [] }
 
     try {
-      const authChain = await BCMR.fetchAuthChainFromChaingraph({
-        chaingraphUrl: CHAINGRAPH_URL,
-        transactionHash: tokenId
-      })
-      console.log(authChain)
+      const migrations = parseAuthchainMigrations(await authchainPromise)
+      // Chaingraph's authchain can start before the token's authbase (the tokenId tx); ignore those
+      const authbaseIndex = migrations.findIndex(m => m.txHash === tokenId)
+      const metadataUpdates = migrations.slice(Math.max(authbaseIndex, 0)).filter(m => m.isMetadataUpdate)
+      authchainUpdates = metadataUpdates.length
 
-      const latestAuthChainEntry = authChain.at(-1)
-      if (latestAuthChainEntry) {
-        authchainUpdates = authChain.length
-
-        // Store BCMR authchain entries for enrichment in the component
-        authchainHistory = authChain.map(entry => ({
-          txHash: entry.txHash,
-          isMetadataUpdate: true,
-          contentHash: entry.contentHash,
-          httpsUrl: entry.httpsUrl,
-          uris: entry.uris
-        }))
-
-        const bcmrLocation = latestAuthChainEntry.uris[0]
-        httpsUrl = latestAuthChainEntry.httpsUrl
-        if (!bcmrLocation || !httpsUrl) return
-
-        const providedHash = latestAuthChainEntry.contentHash
-        if (bcmrLocation.startsWith("ipfs://")) {
-          httpsUrl = bcmrLocation.replace("ipfs://", IPFS_GATEWAY)
-        }
-        metaDataLocation = bcmrLocation
-
-        // Step A: Import metadata registry from URL
-        const isIpfs = bcmrLocation.startsWith('ipfs://') || httpsUrl.includes('/ipfs/')
-        let importSucceeded = false
-        try {
-          console.log("Importing an on-chain resolved BCMR!")
-          await BCMR.addMetadataRegistryFromUri(httpsUrl)
-          importSucceeded = true
-        } catch (e) {
-          console.log(e)
-          if (e instanceof TypeError && (e.message.includes('Failed to fetch') || e.message.includes('fetch'))) {
-            diagnostics.push({
-              type: 'fetch_failed',
-              message: isIpfs
-                ? 'Unable to fetch metadata from IPFS gateway. The gateway may be down, slow, or the content may not be pinned.'
-                : 'Unable to fetch metadata from URL. This is likely a CORS issue — the server needs to include an Access-Control-Allow-Origin header.',
-              details: `URL: ${httpsUrl}\nError: ${e.message}`
-            })
-          } else if (e instanceof SyntaxError) {
-            diagnostics.push({
-              type: 'invalid_json',
-              message: isIpfs
-                ? 'IPFS gateway returned non-JSON content. The gateway may be returning an error page or the pinned content is not valid JSON.'
-                : 'Server returned non-JSON content. The URL may be serving an HTML error page or Cloudflare challenge.',
-              details: `URL: ${httpsUrl}\nError: ${e.message}`
-            })
-          } else {
-            diagnostics.push({
-              type: 'fetch_failed',
-              message: `Failed to import metadata registry: ${e instanceof Error ? e.message : String(e)}`,
-              details: `URL: ${httpsUrl}`
-            })
-          }
-        }
-
-        if (importSucceeded) {
-          // Step B: Schema validation
-          const tokenMetadata = BCMR.getTokenInfo(tokenId)
-          if (!tokenMetadata || typeof tokenMetadata !== 'object') {
-            // Registry was fetched but doesn't contain an entry for this tokenId
-            // This typically means the txid is not a token category
-            console.log('No metadata entry found for this tokenId in the resolved registry')
-          } else {
-            const validationResult = IdentitySnapshotSchema.safeParse(tokenMetadata)
-            if (validationResult.success) {
-              tokenMetadataResult = tokenMetadata as TokenMetadata
-              isSchemaValid = true
-            } else {
-              console.error('Token metadata schema validation failed:', validationResult.error.issues)
-              tokenMetadataResult = tokenMetadata as TokenMetadata
-              isSchemaValid = false
-              const issueMessages = validationResult.error.issues.map(
-                issue => `${issue.path.join('.')}: ${issue.message}`
-              ).join('\n')
-              diagnostics.push({
-                type: 'schema_invalid',
-                message: 'Token metadata does not fully conform to the BCMR schema.',
-                details: issueMessages
-              })
-            }
-          }
-
-          // Step C: Hash verification
-          try {
-            const response = await fetch(httpsUrl)
-            if (!response.ok) {
-              metadataHashMatch = false
-              diagnostics.push({
-                type: 'http_error',
-                message: `HTTP ${response.status} when fetching metadata for hash verification.`,
-                details: `URL: ${httpsUrl}\nStatus: ${response.status} ${response.statusText}`
-              })
-            } else {
-              const bcmrContent = await response.text()
-              const contentHash = binToHex(sha256.hash(utf8ToBin(bcmrContent)))
-              metadataHashMatch = contentHash === providedHash
-              if (!metadataHashMatch) {
-                diagnostics.push({
-                  type: 'hash_mismatch',
-                  message: 'On-chain content hash does not match the fetched metadata content.',
-                  details: `expected: ${providedHash}\nactual: ${contentHash}`
-                })
-              }
-            }
-          } catch (e) {
-            console.log(e)
-            if (e instanceof TypeError && (e.message.includes('Failed to fetch') || e.message.includes('fetch'))) {
-              diagnostics.push({
-                type: 'fetch_failed',
-                message: isIpfs
-                  ? 'Unable to re-fetch metadata from IPFS gateway for hash verification.'
-                  : 'Unable to re-fetch metadata for hash verification (likely CORS).',
-                details: `URL: ${httpsUrl}\nError: ${(e as Error).message}`
-              })
-            } else {
-              diagnostics.push({
-                type: 'fetch_failed',
-                message: `Hash verification fetch failed: ${e instanceof Error ? e.message : String(e)}`,
-                details: `URL: ${httpsUrl}`
-              })
-            }
-          }
-        }
+      // Per spec only the latest publication counts: if it can't be used, don't fall back to an older registry
+      const latestUpdate = metadataUpdates.at(-1)
+      const publication = latestUpdate?.publication
+      if (publication?.httpsUrl) {
+        httpsUrl = publication.httpsUrl
+        metaDataLocation = publication.resolvedUri
+        resolution = await resolveRegistry(publication, tokenId)
+      } else if (latestUpdate) {
+        resolution.diagnostics.push({
+          type: 'unresolvable_publication',
+          message: publication
+            ? 'The latest BCMR publication has no URI the explorer can fetch (only https://, ipfs:// and protocol-less URIs are supported).'
+            : 'The latest BCMR publication output is malformed (it has no content hash push).',
+          details: `tx: ${latestUpdate.txHash}\noutput: ${latestUpdate.opReturnHex}` +
+            (publication?.uris.length ? `\nURIs: ${publication.uris.join(', ')}` : '')
+        })
       }
     } catch (error) {
       console.log(error)
     }
 
+    const { tokenMetadata, metadataHashMatch, isSchemaValid, diagnostics } = resolution
     setMetadataInfo(prev => ({
       ...prev,
       metaDataLocation,
-      tokenMetadata: tokenMetadataResult,
+      tokenMetadata,
       httpsUrl,
       authchainUpdates,
       metadataHashMatch,
       isSchemaValid,
-      authchainHistory,
       diagnostics: diagnostics.length > 0 ? diagnostics : undefined
     }))
     metadataReadyRef.current?.resolve()
   }
 
-  async function lookUpTokenData(tokenId: string, metadataReady: Promise<void>) {
+  async function lookUpTokenData(tokenId: string, authchainPromise: Promise<AuthchainQueryResult>, metadataReady: Promise<void>) {
     // Start holder query early so it runs in parallel, but await it in Phase 2
     const holderDataPromise = queryAllTokenHolders(tokenId)
     let network: 'mainnet' | 'chipnet' = 'mainnet'
@@ -322,19 +219,10 @@ export default function Home() {
       // Start all queries in parallel, but don't block on the slow holder query
       console.time('initialDataLoad')
 
-      const QUERY_TIMEOUT_MS = 20_000
-      const withTimeout = <T,>(p: Promise<T>, label: string): Promise<T> =>
-        Promise.race([
-          p,
-          new Promise<T>((_, reject) =>
-            setTimeout(() => reject(new Error(`${label} timed out after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
-          )
-        ])
-
       const [genesisResult, issuingResult, authchainResult] = await Promise.allSettled([
         withTimeout(queryGenesisInfo(tokenId), 'queryGenesisInfo'),
         withTimeout(queryIssuingUtxos(tokenId), 'queryIssuingUtxos'),
-        withTimeout(queryAuthchain(tokenId), 'queryAuthchain')
+        authchainPromise
       ])
 
       const respJsonAuthchain = authchainResult.status === 'fulfilled' ? authchainResult.value : null
@@ -415,10 +303,8 @@ export default function Home() {
       const authHeadBlockTimestamp = authheadData?.block_inclusions?.[0]?.block?.timestamp
       const authHeadTimestamp = authHeadBlockTimestamp ? Number(authHeadBlockTimestamp) : undefined
       const authHeadOutputs = authheadData?.outputs as Array<{ output_index: number, locking_bytecode: string }> | undefined
-      // BCMR OP_RETURN prefix: 6a (OP_RETURN) + 04 (OP_PUSH4) + 42434d52 ("BCMR")
-      const BCMR_OP_RETURN_PREFIX = '6a0442434d52'
       const authHeadIsMetadataUpdate = authHeadOutputs?.some(
-        output => output.locking_bytecode?.slice(2).toLowerCase().startsWith(BCMR_OP_RETURN_PREFIX)
+        output => isBcmrOutput(output.locking_bytecode?.slice(2) ?? '')
       ) ?? false
 
       let usesAuthGuard = false
@@ -432,21 +318,7 @@ export default function Home() {
         authHeadAddress = typeof authHeadAddressResult === 'string' ? undefined : authHeadAddressResult.address
       }
 
-      // Parse authchain migrations into AuthchainEntry[]
-      const migrations = authchainData?.migrations
-
-      const authchainMigrations: AuthchainEntry[] = (migrations ?? []).map(m => {
-        const tx = Array.isArray(m.transaction) ? m.transaction[0] : m.transaction
-        const txHash = (tx?.hash ?? '').slice(2)
-        const blockTimestamp = tx?.block_inclusions?.[0]?.block?.timestamp
-        const timestamp = blockTimestamp ? Number(blockTimestamp) : undefined
-        const bcmrOutput = tx?.outputs?.find(
-          output => output.locking_bytecode?.slice(2).toLowerCase().startsWith(BCMR_OP_RETURN_PREFIX)
-        )
-        const isMetadataUpdate = !!bcmrOutput
-        const opReturnHex = bcmrOutput ? bcmrOutput.locking_bytecode?.slice(2) : undefined
-        return { txHash, timestamp, isMetadataUpdate, opReturnHex }
-      })
+      const authchainMigrations = parseAuthchainMigrations(respJsonAuthchain)
       // Remove pre-genesis migrations (Chaingraph includes the funding tx)
       const genesisIndex = authchainMigrations.findIndex(m => m.txHash === genesisTx)
       const filteredMigrations = genesisIndex >= 0 ? authchainMigrations.slice(genesisIndex) : authchainMigrations

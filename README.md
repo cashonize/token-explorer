@@ -27,4 +27,4 @@ Because a Chaingraph instance can serve stale UTXO data (reporting already-spent
 ## How it was made
 
 The project was started from the [mainnet-js React-next](https://github.com/mainnet-cash/mainnet-js/tree/master/demo/react-next) example.
-[Mainnet-js](https://mainnet.cash/) is used to import onchain linked Bitcoin Cash Metadata Registries (BCMR).
+On-chain linked Bitcoin Cash Metadata Registries (BCMR) were originally resolved with [mainnet-js](https://mainnet.cash/); the explorer now resolves them itself (`src/utils/bcmr.ts`), reusing the authchain data it already queries from Chaingraph.

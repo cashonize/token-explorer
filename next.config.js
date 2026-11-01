@@ -1,13 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  webpack: (config, options) => {
+  webpack: (config) => {
+    // @bitauth/libauth instantiates its WASM crypto with top-level await
     config.experiments = { ...config.experiments, topLevelAwait: true };
-    config.resolve.alias = {
-      ...config.resolve.alias, ...{
-        child_process: false,
-      }
-    };
     return config
   },
 }

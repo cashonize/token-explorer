@@ -20,9 +20,6 @@ importers:
       '@electrum-cash/protocol':
         specifier: ^2.6.0
         version: 2.6.0(supports-color@7.2.0)
-      '@mainnet-cash/bcmr':
-        specifier: 2.7.34
-        version: 2.7.34(supports-color@7.2.0)
       chaingraph-ts:
         specifier: ^0.2.6
         version: 0.2.6(typescript@5.9.3)(ws@8.22.0)
@@ -87,10 +84,6 @@ packages:
 
   '@bitauth/libauth@3.0.0':
     resolution: {integrity: sha512-3yoL31XpnhAnf5nDVMFk4xPqebxDwXrgYAwpa31ARJnV5A/eXWlpNYvCd6FTZPFM4VvKfjCBi+jRCrw1hOZ0Jg==}
-    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
-
-  '@bitauth/libauth@3.1.0-next.8':
-    resolution: {integrity: sha512-Pm+Ju+YP3JeBLLTiVrBnia2wwE4G17r4XqpvPRMcklElJTe8J6x3JgKRg1by0Xm3ZY6UFxACkEAoSA+x419/zA==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
   '@electrum-cash/debug-logs@1.0.0':
@@ -359,9 +352,6 @@ packages:
     engines: {node: '>=20.9.0'}
     cpu: [x64]
     os: [win32]
-
-  '@mainnet-cash/bcmr@2.7.34':
-    resolution: {integrity: sha512-Cbbe1bczZBuQ9tPTz/urLitP3eovdDKjWUZ+vEqlFHnapMdBcRMO2vOH5QYVdx/UxTwvLZCwNBjr7WC9hR9S5A==}
 
   '@monsterbitar/isomorphic-ws@5.3.1':
     resolution: {integrity: sha512-BWfWUffbg3uO4K6Cyokg9ff43lPaXAOZcCnNe1lcjCjUMDVrRAb5qEHG5qeJp3ud2SPYbORaNsls5as6SR3oig==}
@@ -833,10 +823,6 @@ packages:
   doctrine@2.1.0:
     resolution: {integrity: sha512-35mSku4ZXK0vfCuHEDAwt55dg2jNajHZ1odvF+8SSr82EsZY4QmXfuWso8oEd8zRhVObSN18aM0CjSdoBX7zIw==}
     engines: {node: '>=0.10.0'}
-
-  dotenv@10.0.0:
-    resolution: {integrity: sha512-rlBi9d8jpv9Sf1klPjNfFAuWDjKLwTIJJ/VxtoTwIR6hnZxcEOQCZg2oIL3MWBYw5GpUDKOEnND7LXTbIpQ03Q==}
-    engines: {node: '>=10'}
 
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
@@ -1342,9 +1328,6 @@ packages:
   lossless-json@4.2.0:
     resolution: {integrity: sha512-bsHH3x+7acZfqokfn9Ks/ej96yF/z6oGGw1aBmXesq4r3fAjhdG4uYuqzDgZMk5g1CZUd5w3kwwIp9K1LOYUiA==}
 
-  mainnet-js@2.7.34:
-    resolution: {integrity: sha512-CgcnXJDIuzcGcUDPKjkYoLkS9dMfJMjFl9weBA7+qvSiaUEVRJCeDKtYAR7g0Q5d40Uu0HPN19zkP1mWvhK9UA==}
-
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
     engines: {node: '>= 0.4'}
@@ -1810,8 +1793,6 @@ snapshots:
 
   '@bitauth/libauth@3.0.0': {}
 
-  '@bitauth/libauth@3.1.0-next.8': {}
-
   '@electrum-cash/debug-logs@1.0.0(supports-color@7.2.0)':
     dependencies:
       debug: 4.4.3(supports-color@7.2.0)
@@ -2061,14 +2042,6 @@ snapshots:
 
   '@img/sharp-win32-x64@0.35.5':
     optional: true
-
-  '@mainnet-cash/bcmr@2.7.34(supports-color@7.2.0)':
-    dependencies:
-      mainnet-js: 2.7.34(supports-color@7.2.0)
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
 
   '@monsterbitar/isomorphic-ws@5.3.1(ws@8.22.0)':
     dependencies:
@@ -2550,9 +2523,6 @@ snapshots:
   doctrine@2.1.0:
     dependencies:
       esutils: 2.0.3
-
-  dotenv@10.0.0:
-    optional: true
 
   dunder-proto@1.0.1:
     dependencies:
@@ -3207,17 +3177,6 @@ snapshots:
       js-tokens: 4.0.0
 
   lossless-json@4.2.0: {}
-
-  mainnet-js@2.7.34(supports-color@7.2.0):
-    dependencies:
-      '@bitauth/libauth': 3.1.0-next.8
-      '@electrum-cash/network': 4.4.8(supports-color@7.2.0)
-    optionalDependencies:
-      dotenv: 10.0.0
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
 
   math-intrinsics@1.1.0: {}
 
