@@ -1,5 +1,7 @@
 import { graphql, ChaingraphClient } from "chaingraph-ts";
 import { CHAINGRAPH_URL } from "@/constants";
+import type { AuthchainEntry } from "@/interfaces";
+import { isBcmrOutput, parseBcmrPublication } from "./bcmr";
 
 const chaingraphClient = new ChaingraphClient(CHAINGRAPH_URL);
 
@@ -192,4 +194,25 @@ export async function queryAuthchain(tokenId:string){
   }`);
   const variables = { tokenId: `\\x${tokenId}` }
   return (await chaingraphClient.query(queryReqAuthHead, variables)).data
+}
+
+export type AuthchainQueryResult = Awaited<ReturnType<typeof queryAuthchain>>
+
+/**
+ * Turn the authchain migrations from queryAuthchain into AuthchainEntry[] (in
+ * migration order), decoding the BCMR publication output where there is one.
+ * Includes pre-genesis migrations (the funding tx); callers filter those as needed.
+ */
+export function parseAuthchainMigrations(result: AuthchainQueryResult): AuthchainEntry[] {
+  const migrations = result?.transaction[0]?.authchains?.[0]?.migrations ?? []
+  return migrations.map(m => {
+    const tx = Array.isArray(m.transaction) ? m.transaction[0] : m.transaction
+    const txHash = (tx?.hash ?? '').slice(2)
+    const blockTimestamp = tx?.block_inclusions?.[0]?.block?.timestamp
+    const timestamp = blockTimestamp ? Number(blockTimestamp) : undefined
+    const bcmrOutput = tx?.outputs?.find(output => isBcmrOutput(output.locking_bytecode?.slice(2) ?? ''))
+    const opReturnHex = bcmrOutput?.locking_bytecode?.slice(2)
+    const publication = opReturnHex ? parseBcmrPublication(opReturnHex) : undefined
+    return { txHash, timestamp, isMetadataUpdate: !!bcmrOutput, opReturnHex, publication }
+  })
 }

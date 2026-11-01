@@ -1,6 +1,8 @@
 import type { TokenInfo, MetadataInfo, AuthchainEntry, Diagnostic, ElectrumVerification } from '@/interfaces'
 import { formatTimestamp } from '@/utils/utils'
 import { BLOCK_EXPLORER_URL } from '@/constants'
+import { parseOpReturnPushes } from '@/utils/bcmr'
+import { binToUtf8, hexToBin } from '@bitauth/libauth'
 import styles from '@/styles/Home.module.css'
 import { Badge, SectionTitle, Row, Rows, CheckItem, HashLink } from './ui'
 
@@ -17,24 +19,8 @@ const getBaseDomain = (url: string) => {
   } catch { return undefined }
 }
 
-function AuthchainTimeline({ migrations, bcmrEntries, genesisTx, authHead, authHeadBurned }: { migrations?: AuthchainEntry[], bcmrEntries?: AuthchainEntry[], genesisTx?: string, authHead?: string, authHeadBurned?: boolean }) {
-  if (!migrations || migrations.length === 0) return null
-
-  // Merge: use migrations as the base timeline, enrich with BCMR data
-  const bcmrMap = new Map<string, AuthchainEntry>()
-  if (bcmrEntries) {
-    for (const entry of bcmrEntries) {
-      bcmrMap.set(entry.txHash, entry)
-    }
-  }
-
-  const entries = migrations.map(m => {
-    const bcmrData = bcmrMap.get(m.txHash)
-    if (bcmrData) {
-      return { ...m, ...bcmrData, timestamp: m.timestamp, isMetadataUpdate: true }
-    }
-    return m
-  })
+function AuthchainTimeline({ entries, genesisTx, authHead, authHeadBurned }: { entries?: AuthchainEntry[], genesisTx?: string, authHead?: string, authHeadBurned?: boolean }) {
+  if (!entries || entries.length === 0) return null
 
   return (
     <details className="disclosure">
@@ -43,7 +29,7 @@ function AuthchainTimeline({ migrations, bcmrEntries, genesisTx, authHead, authH
       </summary>
       <div className="disclosure-body">
         <div style={{ marginTop: '10px' }}>
-          {entries.map((entry, index) => (
+          {entries.map(({ publication, ...entry }, index) => (
             <div key={entry.txHash} className={styles.entry}>
               <div className={styles.entryHead}>
                 <span className={styles.entryIndex}>#{index}</span>
@@ -61,20 +47,20 @@ function AuthchainTimeline({ migrations, bcmrEntries, genesisTx, authHead, authH
               {entry.timestamp && (
                 <div style={{ color: 'var(--text-muted)' }}>{formatTimestamp(entry.timestamp)}</div>
               )}
-              {entry.isMetadataUpdate && (entry.contentHash || entry.uris) && (
+              {publication && (
                 <details className="disclosure-inline">
                   <summary>BCMR details</summary>
                   <div style={{ marginLeft: '8px', fontSize: '0.9em', marginTop: '4px' }}>
-                    {entry.contentHash && <div style={{ wordBreak: 'break-all' }}>content hash: <span className="mono">{entry.contentHash}</span></div>}
-                    {entry.httpsUrl && (
+                    {publication.contentHash && <div style={{ wordBreak: 'break-all' }}>content hash: <span className="mono">{publication.contentHash}</span></div>}
+                    {publication.httpsUrl && (
                       <div>https url:{' '}
-                        <a href={entry.httpsUrl} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }}>
-                          {entry.httpsUrl}
+                        <a href={publication.httpsUrl} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }}>
+                          {publication.httpsUrl}
                         </a>
                       </div>
                     )}
-                    {entry.uris && entry.uris.length > 0 && (
-                      <div>uri{entry.uris.length > 1 ? 's' : ''}: {entry.uris.join(', ')}</div>
+                    {publication.uris.length > 0 && (
+                      <div>uri{publication.uris.length > 1 ? 's' : ''}: {publication.uris.join(', ')}</div>
                     )}
                   </div>
                 </details>
@@ -95,37 +81,8 @@ const diagnosticLabels: Record<string, string> = {
   hash_mismatch: 'Hash Mismatch'
 }
 
-// Parse OP_RETURN script into data pushes (skipping opcodes)
-function parseOpReturnPushes(hex: string): string[] {
-  const pushes: string[] = []
-  let i = 0
-  // Skip OP_RETURN (6a)
-  if (hex.slice(0, 2) === '6a') i = 2
-  while (i < hex.length) {
-    const opcode = parseInt(hex.slice(i, i + 2), 16)
-    i += 2
-    let len = 0
-    if (opcode >= 0x01 && opcode <= 0x4b) {
-      len = opcode
-    } else if (opcode === 0x4c) { // OP_PUSHDATA1
-      len = parseInt(hex.slice(i, i + 2), 16); i += 2
-    } else if (opcode === 0x4d) { // OP_PUSHDATA2
-      len = parseInt(hex.slice(i + 2, i + 4) + hex.slice(i, i + 2), 16); i += 4
-    } else {
-      continue
-    }
-    pushes.push(hex.slice(i, i + len * 2))
-    i += len * 2
-  }
-  return pushes
-}
-
 function hexToUtf8(hex: string): string {
-  const bytes: number[] = []
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes.push(parseInt(hex.slice(i, i + 2), 16))
-  }
-  return new TextDecoder().decode(new Uint8Array(bytes))
+  return binToUtf8(hexToBin(hex))
 }
 
 function LatestPublicationOutput({ migrations, lastMetadataUpdateTimestamp }: {
@@ -288,8 +245,7 @@ export function AuthchainInfo({ tokenInfo, metadataInfo, electrumVerification }:
             />
 
             <AuthchainTimeline
-              migrations={tokenInfo.authchainMigrations}
-              bcmrEntries={metadataInfo.authchainHistory}
+              entries={tokenInfo.authchainMigrations}
               genesisTx={tokenInfo.genesisTx}
               authHead={tokenInfo.authHead}
               authHeadBurned={tokenInfo.authHeadBurned}

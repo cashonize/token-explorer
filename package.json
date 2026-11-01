@@ -13,7 +13,6 @@
   "dependencies": {
     "@bitauth/libauth": "^3.0.0",
     "@electrum-cash/protocol": "^2.6.0",
-    "@mainnet-cash/bcmr": "2.7.34",
     "chaingraph-ts": "^0.2.6",
     "next": "^15.5.28",
     "next-plausible": "^3.12.5",
