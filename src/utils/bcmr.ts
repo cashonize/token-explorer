@@ -2,7 +2,7 @@ import { binToHex, binToUtf8, decodeAuthenticationInstructions, hexToBin, sha256
 import { IPFS_GATEWAY } from '@/constants'
 import { IdentitySnapshotSchema } from './bcmrSchema'
 import { ipfsToGatewayUrl } from './utils'
-import type { Diagnostic, TokenMetadata } from '@/interfaces'
+import type { AuthchainEntry, Diagnostic, TokenMetadata } from '@/interfaces'
 
 // BCMR implementation (CHIP-BCMR v2), see https://github.com/bitjson/chip-bcmr
 // Covers what the explorer needs: decoding publication outputs, resolving their URIs,
@@ -16,18 +16,31 @@ export function isBcmrOutput(lockingBytecodeHex: string): boolean {
   return lockingBytecodeHex.toLowerCase().startsWith(BCMR_OUTPUT_PREFIX)
 }
 
+const OP_RETURN = 0x6a
+
 /**
- * Decode the data pushes following OP_RETURN, as hex strings.
+ * Decode the data pushes following OP_RETURN, as hex strings. Non-push opcodes are
+ * skipped and decoding stops at a truncated push; either one sets `malformed`.
+ */
+function decodeOpReturnPushes(lockingBytecodeHex: string): { pushes: string[], malformed: boolean } {
+  const instructions = decodeAuthenticationInstructions(hexToBin(lockingBytecodeHex))
+  const pushes: string[] = []
+  let malformed = false
+  const [first, ...rest] = instructions
+  for (const instruction of first?.opcode === OP_RETURN ? rest : instructions) {
+    if ('malformed' in instruction && instruction.malformed) return { pushes, malformed: true }
+    if ('data' in instruction) pushes.push(binToHex(instruction.data))
+    else malformed = true
+  }
+  return { pushes, malformed }
+}
+
+/**
+ * Decode the data pushes following OP_RETURN, as hex strings (lenient, for display).
  * Non-push opcodes are skipped; decoding stops at a malformed (truncated) push.
  */
 export function parseOpReturnPushes(lockingBytecodeHex: string): string[] {
-  const instructions = decodeAuthenticationInstructions(hexToBin(lockingBytecodeHex))
-  const pushes: string[] = []
-  for (const instruction of instructions) {
-    if ('malformed' in instruction && instruction.malformed) break
-    if ('data' in instruction) pushes.push(binToHex(instruction.data))
-  }
-  return pushes
+  return decodeOpReturnPushes(lockingBytecodeHex).pushes
 }
 
 export interface BcmrPublication {
@@ -74,11 +87,14 @@ export function resolveBcmrUri(uri: string, ipfsGateway: string = IPFS_GATEWAY):
 
 /**
  * Decode a BCMR publication output: OP_RETURN <'BCMR'> <sha256> <uri>...
- * Returns undefined if the output is not a well-formed BCMR publication.
+ * Returns undefined if the output is not a well-formed BCMR publication: a truncated
+ * push, a non-push opcode, or a hash push that isn't 32 bytes (except the CID-only form).
  */
 export function parseBcmrPublication(lockingBytecodeHex: string): BcmrPublication | undefined {
   if (!isBcmrOutput(lockingBytecodeHex)) return undefined
-  const pushes = parseOpReturnPushes(lockingBytecodeHex)
+  // A truncated push would otherwise silently drop the URIs and look like a hash-only publication
+  const { pushes, malformed } = decodeOpReturnPushes(lockingBytecodeHex)
+  if (malformed) return undefined
   const [, hashPush, ...uriPushes] = pushes
   if (hashPush === undefined) return undefined
 
@@ -87,6 +103,7 @@ export function parseBcmrPublication(lockingBytecodeHex: string): BcmrPublicatio
   // a UTF-8 IPFS CID in this push; recognise that form so those registries still resolve.
   const hashPushUtf8 = uriPushes.length === 0 ? binToUtf8(hexToBin(hashPush)) : ''
   const isCidOnly = /^(baf[a-z2-7]{20,}|Qm[1-9A-HJ-NP-Za-km-z]{44})$/.test(hashPushUtf8)
+  if (!isCidOnly && hashPush.length !== 64) return undefined
   const uris = isCidOnly
     ? [`ipfs://${hashPushUtf8}`]
     : uriPushes.map(push => binToUtf8(hexToBin(push)))
@@ -103,6 +120,46 @@ export function parseBcmrPublication(lockingBytecodeHex: string): BcmrPublicatio
   }
 
   return { contentHash: hashPush, uris, httpsUrl, resolvedUri, isCidOnly }
+}
+
+export interface LatestPublicationSelection {
+  /** number of metadata updates from the authbase (tokenId tx) onward */
+  metadataUpdates: number
+  /** the latest metadata update, if any */
+  latestUpdate?: AuthchainEntry
+  /** its publication, only when it can be fetched */
+  publication?: BcmrPublication
+  /** why the latest metadata update can't be used, if it can't */
+  diagnostic?: Diagnostic
+}
+
+/**
+ * Pick the publication to resolve from the authchain migrations (in migration order).
+ * Migrations before the authbase (the tokenId tx) are ignored. Per spec only the latest
+ * publication counts: if it is malformed or has no fetchable URI, that is reported and
+ * there is no fallback to an older registry.
+ */
+export function selectLatestPublication(migrations: AuthchainEntry[], tokenId: string): LatestPublicationSelection {
+  // Chaingraph's authchain can start before the token's authbase; ignore those migrations
+  const authbaseIndex = migrations.findIndex(m => m.txHash === tokenId)
+  const metadataUpdates = migrations.slice(Math.max(authbaseIndex, 0)).filter(m => m.isMetadataUpdate)
+  const latestUpdate = metadataUpdates.at(-1)
+  const publication = latestUpdate?.publication
+  if (!latestUpdate || publication?.httpsUrl) {
+    return { metadataUpdates: metadataUpdates.length, latestUpdate, publication }
+  }
+  return {
+    metadataUpdates: metadataUpdates.length,
+    latestUpdate,
+    diagnostic: {
+      type: 'unresolvable_publication',
+      message: publication
+        ? 'The latest BCMR publication has no URI the explorer can fetch (only https://, ipfs:// and protocol-less URIs are supported).'
+        : 'The latest BCMR publication output is malformed (missing or non-32-byte content hash, a truncated push, or a non-push opcode).',
+      details: `tx: ${latestUpdate.txHash}\noutput: ${latestUpdate.opReturnHex}` +
+        (publication?.uris.length ? `\nURIs: ${publication.uris.join(', ')}` : '')
+    }
+  }
 }
 
 /**
