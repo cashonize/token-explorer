@@ -24,7 +24,7 @@ BCMR is the metadata standard for CashTokens on BCH. It uses "authchains" (zerot
 
 - `index.html` (repo root) holds the head tags, an inline pre-paint script that applies a stored `theme` from localStorage as `data-theme` (no stored value: `prefers-color-scheme` in `globals.css` decides), the Plausible analytics script (`data-domain="tokenexplorer.cash"`, plausible.io, which ignores localhost), and a static "Loading…" placeholder inside `#root` (styled by `.app-boot` in `globals.css`) that React replaces on mount. Nothing else is in the HTML, so crawlers and link previews only see the title and meta description. `src/main.tsx` mounts `src/App.tsx` in `<StrictMode>` and imports `src/styles/globals.css`; component styles are CSS modules.
 - Nothing is prerendered, so state that depends on the browser is read in lazy `useState` initializers on first render: the theme (`ThemeToggle`), the `verifyElectrum` toggle, and the initial `?tokenId=` (which also starts the app in the loading state, so a token URL renders the compact header straight away). The search for the initial tokenId runs from a mount effect via `useEffectEvent`.
-- `vite.config.ts`: `@/` alias to `src/`; Vite's default build target (`@bitauth/libauth` instantiates its WASM with top-level await, which the default target supports).
+- `vite.config.ts`: `@/` alias to `src/`; Vite's default build target (`@bitauth/libauth` instantiates its WASM with top-level await, which the default target supports). It also holds the Vitest config (`test` block, `src/**/*.test.ts`), so `pnpm test` uses the same alias.
 - TypeScript: `tsconfig.json` is a solution file referencing `tsconfig.app.json` (`src/`, `vite/client` types, no Node types) and `tsconfig.node.json` (`vite.config.ts` and `src/**/*.test.ts(x)`, Node + `vite/client` types). `pnpm typecheck` runs `tsc -b`, and `pnpm build` runs it before `vite build`.
 - Env: `envPrefix` is `['VITE_', 'NEXT_PUBLIC_']` so the variable name `NEXT_PUBLIC_CHAINGRAPH_URL` from the Next.js era still works (read as `import.meta.env.NEXT_PUBLIC_CHAINGRAPH_URL` in `src/constants.ts`, typed in `src/vite-env.d.ts`). It is inlined at build time.
 - Hosted on Netlify as a static site: `netlify.toml` builds with `pnpm build`, publishes `dist/`, pins `NODE_VERSION = "22"` (Vite 8 needs Node ^20.19 || >=22.12) and serves `/assets/*` (content-hashed) as immutable. `package.json` pins pnpm via `packageManager`.
@@ -39,6 +39,7 @@ ESLint CLI with a flat config in `eslint.config.mjs`: `@eslint/js` and `typescri
 2. `searchToken()` starts a single `queryAuthchain()` request and hands the promise to two parallel consumers:
    - `lookUpTokenData()` - Queries Chaingraph for on-chain token info (genesis supply, NFT counts, holders, authchain). Runs in three phases: Phase 1 (fast queries: genesis, issuing UTXOs, authchain), Phase 2 (slow paginated holder query), Phase 3 (Electrum verification, non-blocking)
    - `fetchMetadata()` - Takes the latest BCMR publication from the authchain migrations and resolves/validates the registry via `src/utils/bcmr.ts`
+3. Each search (and `resetToHome()`) increments `searchGenerationRef`. The async consumers get an `isCurrent()` check and call it after every `await`, right before setting state, so results of a superseded search are dropped instead of overwriting the current view. Electrum runs track their generation in `electrumInFlightRef` the same way.
 
 ### External Dependencies
 
@@ -50,7 +51,7 @@ ESLint CLI with a flat config in `eslint.config.mjs`: `@eslint/js` and `typescri
 
 `src/utils/bcmr.ts` is the explorer's own BCMR implementation (it replaced `@mainnet-cash/bcmr`):
 - `isBcmrOutput()` / `parseBcmrPublication()` - detect and decode publication outputs (`OP_RETURN <'BCMR'> <sha256> <uri>...`, prefix exactly `6a0442434d52` per spec). The non-spec mainnet-js form `OP_RETURN <'BCMR'> <utf8 IPFS CID>` is recognised and flagged `isCidOnly`; a spec hash-only publication (no URIs) has no fetchable URL. Outputs with a truncated push, a non-push opcode after OP_RETURN, or a hash push that isn't 32 bytes (other than the CID form) are rejected as malformed
-- `resolveBcmrUri()` - `ipfs://` via `IPFS_GATEWAY`, protocol-less URIs (incl. `host:port/...`) as HTTPS, a domain without a path to `/.well-known/bitcoin-cash-metadata-registry.json`; other protocols (e.g. `http://`) are skipped
+- `resolveBcmrUri()` - `ipfs://` via `IPFS_GATEWAY` (`ipfsToGatewayUrl()` in `src/utils/utils.ts`, also used for token icons and metadata link chips; drops a redundant `ipfs://ipfs/` and keeps the path), protocol-less URIs (incl. `host:port/...`) as HTTPS, a domain without a path to `/.well-known/bitcoin-cash-metadata-registry.json`; other protocols (e.g. `http://`) are skipped
 - `resolveRegistry()` - fetches the registry once, checks the sha256 over the raw response bytes, parses JSON, selects the snapshot and Zod-validates it, returning structured diagnostics
 - `getCurrentSnapshot()` - per spec: the snapshot with the latest reached timestamp, or the oldest one if none is reached yet; first key only if no key is an ISO timestamp
 
@@ -58,7 +59,7 @@ ESLint CLI with a flat config in `eslint.config.mjs`: `@eslint/js` and `typescri
 
 ### OTR (OpenTokenRegistry) Verification
 
-The app checks if tokens are registered in the OpenTokenRegistry (https://otr.cash). Currently only checks if the tokenId is present in the registry, not whether the metadata matches. The registry is cached in memory for the session. See `src/utils/otrRegistry.ts`.
+The app checks if tokens are registered in the OpenTokenRegistry (https://otr.cash). Currently only checks if the tokenId is present in the registry, not whether the metadata matches. The registry is cached in memory for the session; a network error or non-2xx response is retried on the next lookup, a registry that fails schema validation is not. See `src/utils/otrRegistry.ts`.
 
 ### BCMR Schema Validation
 

@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -14,5 +15,9 @@ export default defineConfig({
   build: {
     // Single-page app shipped as one chunk; libauth inlines its WASM binaries as base64 (~340 kB)
     chunkSizeWarningLimit: 1000,
+  },
+  // Vitest (pnpm test) reads this config too
+  test: {
+    include: ['src/**/*.test.ts'],
   },
 })

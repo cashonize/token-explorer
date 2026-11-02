@@ -12,6 +12,7 @@ import {
 } from './bcmr'
 import { parseAuthchainMigrations, type AuthchainQueryResult } from './queryChainGraph'
 import type { AuthchainEntry } from '@/interfaces'
+import { IPFS_GATEWAY } from '@/constants'
 
 const GATEWAY = 'https://gateway.test/ipfs/'
 const HASH = 'ab'.repeat(32)
@@ -232,6 +233,15 @@ describe('resolveBcmrUri', () => {
 
   it.each(['http://example.com/bcmr.json', 'ftp://example.com/bcmr.json'])('skips %s', uri => {
     expect(resolveBcmrUri(uri, GATEWAY)).toBeUndefined()
+  })
+
+  // Default gateway (IPFS_GATEWAY from constants)
+  it('drops a redundant ipfs/ prefix: ipfs://ipfs/<cid>', () => {
+    expect(resolveBcmrUri(`ipfs://ipfs/${CID_V1}`)).toBe(`${IPFS_GATEWAY}${CID_V1}`)
+  })
+
+  it('keeps the path after the CID: ipfs://<cid>/bcmr.json', () => {
+    expect(resolveBcmrUri(`ipfs://${CID_V1}/bcmr.json`)).toBe(`${IPFS_GATEWAY}${CID_V1}/bcmr.json`)
   })
 })
 
