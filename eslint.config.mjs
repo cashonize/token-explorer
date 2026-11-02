@@ -12,6 +12,21 @@ export default defineConfig([
   // and Vite's react-refresh preset (only-export-components, so Fast Refresh keeps state).
   js.configs.recommended,
   tseslint.configs.recommended,
+  // Type-aware rules, TS files only (they need type information; eslint.config.mjs has none).
+  // projectService resolves each file through tsconfig.json's references: src/ via
+  // tsconfig.app.json, vite.config.ts and *.test.ts(x) via tsconfig.node.json.
+  {
+    files: ["**/*.{ts,tsx,mts,cts}"],
+    extends: [tseslint.configs.recommendedTypeChecked],
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
+    rules: {
+      // Un-awaited promises must be handled: `await`, `.catch(...)`, or `void` plus a comment
+      // saying where the rejection is caught.
+      "@typescript-eslint/no-floating-promises": "error",
+    },
+  },
   react.configs.flat.recommended,
   react.configs.flat["jsx-runtime"],
   reactRefresh.configs.vite,
