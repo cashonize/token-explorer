@@ -1,7 +1,7 @@
 import Head from 'next/head'
 import styles from '@/styles/Home.module.css'
 import { hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth'
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { queryGenesisInfo, queryIssuingUtxos, queryAuthchain, queryAllTokenHolders, queryGenesisCategories, parseAuthchainMigrations, type AuthchainQueryResult } from '../utils/queryChainGraph'
 import { countUniqueHolders, calculateTotalSupplyFT } from '../utils/calculations'
 import { checkOtrVerified } from '../utils/otrRegistry'
@@ -29,7 +29,6 @@ export default function Home() {
   const [tokenInfoError, setTokenInfoError] = useState<string>()
   const [extendedTokenInfoError, setExtendedTokenInfoError] = useState<string>()
   const [metadataInfo, setMetadataInfo] = useState<MetadataInfo>()
-  const [tokenIconUri, setTokenIconUri] = useState<string>("")
   const [electrumVerification, setElectrumVerification] = useState<ElectrumVerification>()
   const [verifyElectrum, setVerifyElectrum] = useState<boolean>(false)
 
@@ -46,9 +45,14 @@ export default function Home() {
 
   useEffect(() => {
     const stored = localStorage.getItem('verifyElectrum') === 'true'
+    // localStorage is browser-only: reading it in a lazy initializer would mismatch the SSR markup
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setVerifyElectrum(stored)
     verifyElectrumRef.current = stored
   }, [])
+
+  // Effect Event: reads the latest searchToken without making the on-mount effect depend on it
+  const searchTokenOnMount = useEffectEvent((id: string) => searchToken(id))
 
   useEffect(() => {
     const url = new URL(window.location.href)
@@ -58,21 +62,14 @@ export default function Home() {
     // compact before first paint; React now owns the UI, so clear it.
     document.documentElement.removeAttribute("data-has-token")
     if (!readTokenId) return
-    searchToken(readTokenId)
+    searchTokenOnMount(readTokenId)
   }, [])
 
-  useEffect(() => {
-    const imageOrIconUri = metadataInfo?.tokenMetadata?.uris?.image ?? metadataInfo?.tokenMetadata?.uris?.icon
-    if (imageOrIconUri) {
-      setTokenIconUri(ipfsToGatewayUrl(imageOrIconUri))
-    }
-  }, [metadataInfo])
-
-  useEffect(() => {
-    if (tokenInfo) {
-      setIsLoadingTokenInfo(false)
-    }
-  }, [tokenInfo])
+  // Derived from metadataInfo during render (no state/effect needed)
+  const imageOrIconUri = metadataInfo?.tokenMetadata?.uris?.image ?? metadataInfo?.tokenMetadata?.uris?.icon ?? ""
+  const tokenIconUri = imageOrIconUri ? ipfsToGatewayUrl(imageOrIconUri) : ""
+  // Core-data loading ends once tokenInfo arrives (errors clear the flag explicitly)
+  const isLoadingCoreData = isLoadingTokenInfo && !tokenInfo
 
   // Resolves when metadata has been set, so lookUpTokenData can wait briefly for it
   const metadataReadyRef = useRef<{ resolve: () => void } | null>(null)
@@ -87,7 +84,6 @@ export default function Home() {
     setExtendedTokenInfo(undefined)
     setExtendedTokenInfoError(undefined)
     setMetadataInfo(undefined)
-    setTokenIconUri("")
     setElectrumVerification(undefined)
     electrumArgsRef.current = null
     setIsLoadingTokenInfo(true)
@@ -112,7 +108,6 @@ export default function Home() {
     setExtendedTokenInfo(undefined)
     setExtendedTokenInfoError(undefined)
     setMetadataInfo(undefined)
-    setTokenIconUri("")
     setElectrumVerification(undefined)
     electrumArgsRef.current = null
     setIsLoadingTokenInfo(false)
@@ -515,7 +510,7 @@ export default function Home() {
           )}
           <TokenSearch
             tokenId={tokenId}
-            isLoading={isLoadingTokenInfo}
+            isLoading={isLoadingCoreData}
             hasTokenInfo={!!tokenInfo}
             onTokenIdChange={setTokenId}
             onSearch={() => searchToken(tokenId)}

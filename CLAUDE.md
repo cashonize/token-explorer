@@ -9,7 +9,7 @@ pnpm install      # Install dependencies
 pnpm dev          # Start development server (http://localhost:3000)
 pnpm build        # Production build
 pnpm start        # Start production server
-pnpm lint         # Run ESLint
+pnpm lint         # Run ESLint (flat config, fails on any warning)
 pnpm typecheck    # Run TypeScript type checking (includes JSX/TSX)
 pnpm test         # Run unit tests (Vitest, src/**/*.test.ts)
 ```
@@ -26,6 +26,10 @@ BCMR is the metadata standard for CashTokens on BCH. It uses "authchains" (zerot
 2. `searchToken()` starts a single `queryAuthchain()` request and hands the promise to two parallel consumers:
    - `lookUpTokenData()` - Queries Chaingraph for on-chain token info (genesis supply, NFT counts, holders, authchain). Runs in three phases: Phase 1 (fast queries: genesis, issuing UTXOs, authchain), Phase 2 (slow paginated holder query), Phase 3 (Electrum verification, non-blocking)
    - `fetchMetadata()` - Takes the latest BCMR publication from the authchain migrations and resolves/validates the registry via `src/utils/bcmr.ts`
+
+### Linting
+
+ESLint CLI with a flat config in `eslint.config.mjs` (`next lint` is deprecated). It builds on `eslint-config-next` (core-web-vitals + typescript; flat-native since v16) and tightens it: `eslint-plugin-react-hooks` 7 recommended preset (incl. the React-Compiler-derived rules such as `set-state-in-effect`, `refs`, `purity`, `static-components`) with `rules-of-hooks`/`exhaustive-deps` as errors, plus a few bug-catching `eslint-plugin-react` rules. Rules that are deliberately off carry a one-line reason in the config. `pnpm lint` runs with `--max-warnings 0`; inline `eslint-disable` comments need a justification on the line above.
 
 ### External Dependencies
 
