@@ -37,7 +37,12 @@ export default function Home() {
   const verifyElectrumRef = useRef(false)
   // Phase-3 arguments, kept so enabling the toggle mid-view can still verify the loaded token
   const electrumArgsRef = useRef<Parameters<typeof verifySupplyViaElectrum> | null>(null)
-  const electrumInFlightRef = useRef(false)
+  // Search generation of the Electrum run in flight (null when idle), so a run for an
+  // older search neither blocks nor overwrites verification of the current token
+  const electrumInFlightRef = useRef<number | null>(null)
+  // Incremented on every new search and on reset; async work from an older search
+  // compares against it and drops its results instead of overwriting the current view
+  const searchGenerationRef = useRef(0)
 
   useEffect(() => {
     const stored = localStorage.getItem('verifyElectrum') === 'true'
@@ -74,6 +79,8 @@ export default function Home() {
 
   function searchToken(rawId: string) {
     const id = sanitizeTokenId(rawId)
+    const generation = ++searchGenerationRef.current
+    const isCurrent = () => searchGenerationRef.current === generation
     setTokenId(id)
     setTokenInfo(undefined)
     setTokenInfoError(undefined)
@@ -89,15 +96,16 @@ export default function Home() {
     })
     // One authchain query feeds both the token info and the BCMR metadata resolution
     const authchainPromise = withTimeout(queryAuthchain(id), 'queryAuthchain')
-    lookUpTokenData(id, authchainPromise, metadataReadyPromise)
-    fetchMetadata(id, authchainPromise)
-    checkOtrStatus(id)
+    lookUpTokenData(id, authchainPromise, metadataReadyPromise, isCurrent)
+    fetchMetadata(id, authchainPromise, isCurrent)
+    checkOtrStatus(id, isCurrent)
     const params = new URLSearchParams(window.location.search)
     params.set("tokenId", id)
     window.history.replaceState({}, "", `${location.pathname}?${params}`)
   }
 
   function resetToHome() {
+    searchGenerationRef.current++
     setTokenId("")
     setTokenInfo(undefined)
     setTokenInfoError(undefined)
@@ -113,15 +121,18 @@ export default function Home() {
 
   function runElectrumVerification() {
     const args = electrumArgsRef.current
-    if (!args || electrumInFlightRef.current) return
-    electrumInFlightRef.current = true
+    // electrumArgsRef only ever holds the current search's arguments
+    const generation = searchGenerationRef.current
+    if (!args || electrumInFlightRef.current === generation) return
+    electrumInFlightRef.current = generation
+    const isCurrent = () => searchGenerationRef.current === generation
     verifySupplyViaElectrum(...args).then(
       result => {
-        if (verifyElectrumRef.current) setElectrumVerification(result)
+        if (isCurrent() && verifyElectrumRef.current) setElectrumVerification(result)
       },
       error => {
         console.error("Electrum verification failed:", error)
-        if (!verifyElectrumRef.current) return
+        if (!isCurrent() || !verifyElectrumRef.current) return
         setElectrumVerification({
           verified: false,
           totalChaingraphUtxos: args[0].length,
@@ -134,7 +145,9 @@ export default function Home() {
           error: error instanceof Error ? error.message : String(error),
         })
       }
-    ).finally(() => { electrumInFlightRef.current = false })
+    ).finally(() => {
+      if (electrumInFlightRef.current === generation) electrumInFlightRef.current = null
+    })
   }
 
   function toggleVerifyElectrum(enabled: boolean) {
@@ -148,12 +161,13 @@ export default function Home() {
     }
   }
 
-  async function checkOtrStatus(tokenId: string) {
+  async function checkOtrStatus(tokenId: string, isCurrent: () => boolean) {
     const isOtrVerified = await checkOtrVerified(tokenId)
+    if (!isCurrent()) return
     setMetadataInfo(prev => prev ? { ...prev, isOtrVerified } : { isOtrVerified })
   }
 
-  async function fetchMetadata(tokenId: string, authchainPromise: Promise<AuthchainQueryResult>) {
+  async function fetchMetadata(tokenId: string, authchainPromise: Promise<AuthchainQueryResult>, isCurrent: () => boolean) {
     let metaDataLocation = ""
     let httpsUrl: string | undefined
     let authchainUpdates = 0
@@ -187,6 +201,8 @@ export default function Home() {
       console.log(error)
     }
 
+    // A newer search has replaced metadataReadyRef too, so don't resolve it either
+    if (!isCurrent()) return
     const { tokenMetadata, metadataHashMatch, isSchemaValid, diagnostics } = resolution
     setMetadataInfo(prev => ({
       ...prev,
@@ -201,7 +217,12 @@ export default function Home() {
     metadataReadyRef.current?.resolve()
   }
 
-  async function lookUpTokenData(tokenId: string, authchainPromise: Promise<AuthchainQueryResult>, metadataReady: Promise<void>) {
+  async function lookUpTokenData(
+    tokenId: string,
+    authchainPromise: Promise<AuthchainQueryResult>,
+    metadataReady: Promise<void>,
+    isCurrent: () => boolean
+  ) {
     // Start holder query early so it runs in parallel, but await it in Phase 2
     const holderDataPromise = queryAllTokenHolders(tokenId)
     let network: 'mainnet' | 'chipnet' = 'mainnet'
@@ -220,6 +241,7 @@ export default function Home() {
         authchainPromise
       ])
 
+      if (!isCurrent()) return
       const respJsonAuthchain = authchainResult.status === 'fulfilled' ? authchainResult.value : null
       if (!respJsonAuthchain) {
         const reason = authchainResult.status === 'rejected' ? authchainResult.reason : 'query returned null'
@@ -349,6 +371,7 @@ export default function Home() {
         metadataReady,
         new Promise(resolve => setTimeout(resolve, 200))
       ])
+      if (!isCurrent()) return
 
       // Add authhead identity output to reserved supply UTXOs if it holds FT
       authHeadVout = Number(identityOutput?.output_index ?? 0)
@@ -397,6 +420,7 @@ export default function Home() {
       })
     } catch (error) {
       console.error("Error in initial data load:", error)
+      if (!isCurrent()) return
       setTokenInfoError("Failed to load token data from Chaingraph")
       setIsLoadingTokenInfo(false)
       return
@@ -407,6 +431,7 @@ export default function Home() {
       console.time('queryAllTokenHolders')
       const respJsonAllTokenHolders = await holderDataPromise
       console.timeEnd('queryAllTokenHolders')
+      if (!isCurrent()) return
       if (!respJsonAllTokenHolders) {
         setExtendedTokenInfoError("Failed to load holder & supply data")
         return
@@ -422,6 +447,7 @@ export default function Home() {
         console.time(`queryAllTokenHolders page ${indexOffset + 1}`)
         const nextPage = await queryAllTokenHolders(tokenId, 5000 * indexOffset)
         console.timeEnd(`queryAllTokenHolders page ${indexOffset + 1}`)
+        if (!isCurrent()) return
         if (!nextPage) {
           setExtendedTokenInfoError("Failed to load holder & supply data (pagination error)")
           return
@@ -458,6 +484,7 @@ export default function Home() {
       if (verifyElectrumRef.current) runElectrumVerification()
     } catch (error) {
       console.error("Error in queryAllTokenHolders:", error)
+      if (!isCurrent()) return
       setExtendedTokenInfoError("Failed to load holder & supply data")
     }
   }
