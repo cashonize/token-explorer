@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import type { MetadataInfo } from '@/interfaces'
+import { ipfsToGatewayUrl } from '@/utils/utils'
 import styles from '@/styles/Home.module.css'
 import { Badge } from './ui'
 
@@ -36,13 +38,16 @@ export function MetadataDisplay({ metadataInfo, tokenIconUri, tokenType, network
     ? Object.keys(tokenMetadata.uris).filter(uri => uri !== "icon" && uri !== "image" && uri !== "web")
     : []
 
-  const hasIcon = (tokenMetadata?.uris?.icon || tokenMetadata?.uris?.image) && tokenIconUri
+  // Remember which icon URL failed to load, so an icon change while mounted gets a fresh try
+  const [failedIconUri, setFailedIconUri] = useState<string | null>(null)
+
+  const hasIcon = (tokenMetadata?.uris?.icon || tokenMetadata?.uris?.image) && tokenIconUri && failedIconUri !== tokenIconUri
 
   return (
     <div className={`card ${styles.section}`}>
       <div className={styles.tokenHeader}>
         {hasIcon ? (
-          <img className="tokenImage" src={tokenIconUri} alt={tokenMetadata?.name ?? 'token icon'} />
+          <img className="tokenImage" src={tokenIconUri} alt={tokenMetadata?.name ?? 'token icon'} onError={() => setFailedIconUri(tokenIconUri)} />
         ) : (
           <div className="tokenImage" style={{ aspectRatio: '1 / 1', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '2rem', fontWeight: 700 }}>
             {(tokenMetadata?.name ?? '?').charAt(0).toUpperCase()}
@@ -79,15 +84,18 @@ export function MetadataDisplay({ metadataInfo, tokenIconUri, tokenType, network
           {tokenMetadata?.uris && (tokenMetadata.uris.web || otherUriKeys.length > 0) && (
             <div className={styles.chipRow}>
               {tokenMetadata.uris.web && (
-                <a className={styles.chip} href={tokenMetadata.uris.web} target="_blank" rel="noreferrer">
+                <a className={styles.chip} href={ipfsToGatewayUrl(tokenMetadata.uris.web)} target="_blank" rel="noreferrer">
                   <GlobeIcon /> Website
                 </a>
               )}
-              {otherUriKeys.map(uriKey => (
-                <a className={styles.chip} key={uriKey} href={tokenMetadata.uris?.[uriKey]} target="_blank" rel="noreferrer">
-                  <LinkIcon /> {uriKey}
-                </a>
-              ))}
+              {otherUriKeys.map(uriKey => {
+                const uri = tokenMetadata.uris?.[uriKey]
+                return (
+                  <a className={styles.chip} key={uriKey} href={uri && ipfsToGatewayUrl(uri)} target="_blank" rel="noreferrer">
+                    <LinkIcon /> {uriKey}
+                  </a>
+                )
+              })}
             </div>
           )}
         </div>

@@ -5,10 +5,10 @@ import React, { useEffect, useRef, useState } from 'react'
 import { queryGenesisInfo, queryIssuingUtxos, queryAuthchain, queryAllTokenHolders, queryGenesisCategories, parseAuthchainMigrations, type AuthchainQueryResult } from '../utils/queryChainGraph'
 import { countUniqueHolders, calculateTotalSupplyFT } from '../utils/calculations'
 import { checkOtrVerified } from '../utils/otrRegistry'
-import { sanitizeTokenId } from '../utils/utils'
+import { sanitizeTokenId, ipfsToGatewayUrl } from '../utils/utils'
 import { isBcmrOutput, resolveRegistry, type RegistryResolution } from '../utils/bcmr'
 import type { TokenInfo, ExtendedTokenInfo, MetadataInfo, ReservedSupplyUtxo, ElectrumVerification } from '@/interfaces'
-import { IPFS_GATEWAY, EXAMPLE_TOKENS } from '@/constants'
+import { EXAMPLE_TOKENS } from '@/constants'
 import { verifySupplyViaElectrum } from '@/utils/queryElectrum'
 import { TokenSearch, MetadataDisplay, SupplyStats, AuthchainInfo, ThemeToggle } from '@/components'
 
@@ -59,12 +59,7 @@ export default function Home() {
   useEffect(() => {
     const imageOrIconUri = metadataInfo?.tokenMetadata?.uris?.image ?? metadataInfo?.tokenMetadata?.uris?.icon
     if (imageOrIconUri) {
-      if (!imageOrIconUri.startsWith('ipfs://')) {
-        setTokenIconUri(imageOrIconUri)
-      } else {
-        const path = imageOrIconUri.replace('ipfs://', '')
-        setTokenIconUri(IPFS_GATEWAY + path)
-      }
+      setTokenIconUri(ipfsToGatewayUrl(imageOrIconUri))
     }
   }, [metadataInfo])
 
