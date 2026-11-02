@@ -29,7 +29,7 @@ BCMR is the metadata standard for CashTokens on BCH. It uses "authchains" (zerot
 
 ### Linting
 
-ESLint CLI with a flat config in `eslint.config.mjs` (`next lint` is deprecated). It builds on `eslint-config-next` (core-web-vitals + typescript; flat-native since v16) and tightens it: `eslint-plugin-react-hooks` 7 recommended preset (incl. the React-Compiler-derived rules such as `set-state-in-effect`, `refs`, `purity`, `static-components`) with `rules-of-hooks`/`exhaustive-deps` as errors, plus a few bug-catching `eslint-plugin-react` rules. Rules that are deliberately off carry a one-line reason in the config. `pnpm lint` runs with `--max-warnings 0`; inline `eslint-disable` comments need a justification on the line above.
+ESLint CLI with a flat config in `eslint.config.mjs` (`next lint` is deprecated). It builds on `eslint-config-next` (core-web-vitals + typescript; flat-native since v16) and tightens it: `eslint-plugin-react-hooks` 7 recommended preset (incl. the React-Compiler-derived rules such as `set-state-in-effect`, `refs`, `purity`, `static-components`) with `rules-of-hooks`/`exhaustive-deps` as errors, plus a few bug-catching `eslint-plugin-react` rules. Rules turned off or considered and not enabled carry a one-line reason in the config. `pnpm lint` runs with `--max-warnings 0` and unused disable directives are errors. Inline disables use ESLint's native reason form on the directive itself: `// eslint-disable-next-line <rule> -- <reason>`. Global ignores are depth-independent (`**/.next/**` etc.) and include `.claude/**`, since flat config doesn't read `.gitignore`.
 
 ### External Dependencies
 

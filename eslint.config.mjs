@@ -1,16 +1,24 @@
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
+import reactHooks from "eslint-plugin-react-hooks";
 
 export default defineConfig([
   // Next.js flat configs: @next/next core-web-vitals plus eslint-plugin-react,
-  // eslint-plugin-react-hooks (recommended, incl. React-Compiler-derived rules),
-  // jsx-a11y and import; then typescript-eslint recommended.
+  // eslint-plugin-react-hooks, jsx-a11y and import; then typescript-eslint recommended.
   ...nextVitals,
   ...nextTs,
   {
+    linterOptions: { reportUnusedDisableDirectives: "error" },
+  },
+  // Our pinned eslint-plugin-react-hooks 7 recommended preset (incl. React-Compiler-derived
+  // rules). eslint-config-next registers the same package; if the two ever resolve to
+  // different copies, ESLint fails with "Cannot redefine plugin" instead of silently
+  // configuring a version we didn't pin.
+  reactHooks.configs.flat.recommended,
+  {
     rules: {
-      // --- react-hooks (7.x recommended preset comes from eslint-config-next) ---
+      // --- react-hooks ---
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "error", // preset ships this as a warning
       // Only reports libraries the React Compiler can't memoize; we don't run the compiler.
@@ -26,11 +34,11 @@ export default defineConfig([
       "react/no-danger": "error",
       // Links come from untrusted registries; keep rel="noreferrer" on target="_blank" (Next turns this off).
       "react/jsx-no-target-blank": "error",
-      // Every list here is static derived data (OP_RETURN pushes, diagnostics) where the
-      // index is the identity; the rule can't tell those from reorderable lists.
-      "react/no-array-index-key": "off",
-      // Without type-aware linting it flags every `cond && <X/>`, including booleans (61 hits).
-      "react/jsx-no-leaked-render": "off",
+      // Considered, not enabled:
+      // - react/no-array-index-key: every list here is static derived data (OP_RETURN pushes,
+      //   diagnostics) where the index is the identity; the rule can't tell them from reorderable lists.
+      // - react/jsx-no-leaked-render: without type-aware linting it flags every `cond && <X/>`,
+      //   including booleans (61 hits).
 
       // --- Next.js ships these as warnings; make them errors so CI lint is meaningful ---
       "@typescript-eslint/no-unused-vars": "error",
@@ -50,5 +58,14 @@ export default defineConfig([
     files: ["src/components/MetadataDisplay.tsx"],
     rules: { "@next/next/no-img-element": "off" },
   },
-  globalIgnores([".next/**", "out/**", "build/**", "coverage/**", "next-env.d.ts"]),
+  // Flat config doesn't read .gitignore and root-anchors patterns, so match build output at any
+  // depth and skip .claude/ (local agent worktrees contain full checkouts with .next/ builds).
+  globalIgnores([
+    ".claude/**",
+    "**/.next/**",
+    "**/out/**",
+    "**/build/**",
+    "**/coverage/**",
+    "next-env.d.ts",
+  ]),
 ]);

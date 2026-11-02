@@ -26,9 +26,8 @@ export function ThemeToggle() {
 
   useEffect(() => {
     const stored = localStorage.getItem('theme')
-    // Browser-only state read after hydration; a lazy initializer would mismatch the SSR markup
     if (stored === 'light' || stored === 'dark') {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is browser-only; a lazy initializer would mismatch the SSR markup
       setTheme(stored)
     } else {
       setTheme(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')

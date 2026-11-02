@@ -45,8 +45,7 @@ export default function Home() {
 
   useEffect(() => {
     const stored = localStorage.getItem('verifyElectrum') === 'true'
-    // localStorage is browser-only: reading it in a lazy initializer would mismatch the SSR markup
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is browser-only; a lazy initializer would mismatch the SSR markup
     setVerifyElectrum(stored)
     verifyElectrumRef.current = stored
   }, [])
@@ -68,8 +67,6 @@ export default function Home() {
   // Derived from metadataInfo during render (no state/effect needed)
   const imageOrIconUri = metadataInfo?.tokenMetadata?.uris?.image ?? metadataInfo?.tokenMetadata?.uris?.icon ?? ""
   const tokenIconUri = imageOrIconUri ? ipfsToGatewayUrl(imageOrIconUri) : ""
-  // Core-data loading ends once tokenInfo arrives (errors clear the flag explicitly)
-  const isLoadingCoreData = isLoadingTokenInfo && !tokenInfo
 
   // Resolves when metadata has been set, so lookUpTokenData can wait briefly for it
   const metadataReadyRef = useRef<{ resolve: () => void } | null>(null)
@@ -400,6 +397,7 @@ export default function Home() {
         genesisInfoError,
         issuingUtxosError
       })
+      setIsLoadingTokenInfo(false)
     } catch (error) {
       console.error("Error in initial data load:", error)
       if (!isCurrent()) return
@@ -510,7 +508,7 @@ export default function Home() {
           )}
           <TokenSearch
             tokenId={tokenId}
-            isLoading={isLoadingCoreData}
+            isLoading={isLoadingTokenInfo}
             hasTokenInfo={!!tokenInfo}
             onTokenIdChange={setTokenId}
             onSearch={() => searchToken(tokenId)}
