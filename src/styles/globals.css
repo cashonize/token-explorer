@@ -160,6 +160,13 @@ html {
   scroll-behavior: smooth;
 }
 
+/* Static placeholder in index.html, shown until React mounts */
+.app-boot {
+  padding: 72px 20px 0;
+  text-align: center;
+  color: var(--text-muted);
+}
+
 body {
   color: var(--text);
   background: var(--bg);

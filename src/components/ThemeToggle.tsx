@@ -38,8 +38,12 @@ export function ThemeToggle() {
   const toggle = () => {
     const next: Theme = theme === 'dark' ? 'light' : 'dark'
     setTheme(next)
-    localStorage.setItem('theme', next)
     document.documentElement.dataset.theme = next
+    try {
+      localStorage.setItem('theme', next)
+    } catch {
+      // localStorage unavailable: the choice applies to this page view only
+    }
   }
 
   return (

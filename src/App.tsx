@@ -141,7 +141,11 @@ export default function App() {
   function toggleVerifyElectrum(enabled: boolean) {
     setVerifyElectrum(enabled)
     verifyElectrumRef.current = enabled
-    localStorage.setItem('verifyElectrum', String(enabled))
+    try {
+      localStorage.setItem('verifyElectrum', String(enabled))
+    } catch {
+      // localStorage unavailable: the setting applies to this page view only
+    }
     if (enabled) {
       if (!electrumVerification) runElectrumVerification()
     } else {

@@ -10,7 +10,7 @@ pnpm dev          # Start Vite dev server (http://localhost:5173)
 pnpm build        # Type check, then production build to dist/
 pnpm preview      # Serve the dist/ build locally
 pnpm lint         # Run ESLint (flat config, fails on any warning)
-pnpm typecheck    # Run TypeScript type checking (includes JSX/TSX)
+pnpm typecheck    # Run TypeScript type checking (tsc -b: app + node projects)
 pnpm test         # Run unit tests (Vitest, src/**/*.test.ts)
 ```
 
@@ -22,11 +22,12 @@ BCMR is the metadata standard for CashTokens on BCH. It uses "authchains" (zerot
 
 ### Build & Hosting
 
-- `index.html` (repo root) holds the head tags, an inline pre-paint script that applies a stored `theme` from localStorage as `data-theme` (no stored value: `prefers-color-scheme` in `globals.css` decides), and the Plausible analytics script (`data-domain="tokenexplorer.cash"`, plausible.io, which ignores localhost). `src/main.tsx` mounts `src/App.tsx` in `<StrictMode>` and imports `src/styles/globals.css`; component styles are CSS modules.
+- `index.html` (repo root) holds the head tags, an inline pre-paint script that applies a stored `theme` from localStorage as `data-theme` (no stored value: `prefers-color-scheme` in `globals.css` decides), the Plausible analytics script (`data-domain="tokenexplorer.cash"`, plausible.io, which ignores localhost), and a static "Loading…" placeholder inside `#root` (styled by `.app-boot` in `globals.css`) that React replaces on mount. Nothing else is in the HTML, so crawlers and link previews only see the title and meta description. `src/main.tsx` mounts `src/App.tsx` in `<StrictMode>` and imports `src/styles/globals.css`; component styles are CSS modules.
 - Nothing is prerendered, so state that depends on the browser is read in lazy `useState` initializers on first render: the theme (`ThemeToggle`), the `verifyElectrum` toggle, and the initial `?tokenId=` (which also starts the app in the loading state, so a token URL renders the compact header straight away). The search for the initial tokenId runs from a mount effect via `useEffectEvent`.
-- `vite.config.ts`: `@/` alias to `src/`, `build.target: 'es2022'` (`@bitauth/libauth` instantiates its WASM with top-level await).
+- `vite.config.ts`: `@/` alias to `src/`; Vite's default build target (`@bitauth/libauth` instantiates its WASM with top-level await, which the default target supports).
+- TypeScript: `tsconfig.json` is a solution file referencing `tsconfig.app.json` (`src/`, `vite/client` types, no Node types) and `tsconfig.node.json` (`vite.config.ts` and `src/**/*.test.ts(x)`, Node + `vite/client` types). `pnpm typecheck` runs `tsc -b`, and `pnpm build` runs it before `vite build`.
 - Env: `envPrefix` is `['VITE_', 'NEXT_PUBLIC_']` so the variable name `NEXT_PUBLIC_CHAINGRAPH_URL` from the Next.js era still works (read as `import.meta.env.NEXT_PUBLIC_CHAINGRAPH_URL` in `src/constants.ts`, typed in `src/vite-env.d.ts`). It is inlined at build time.
-- Hosted on Netlify as a static site: `netlify.toml` builds with `pnpm build` and publishes `dist/`.
+- Hosted on Netlify as a static site: `netlify.toml` builds with `pnpm build`, publishes `dist/`, pins `NODE_VERSION = "22"` (Vite 8 needs Node ^20.19 || >=22.12) and serves `/assets/*` (content-hashed) as immutable. `package.json` pins pnpm via `packageManager`.
 
 ### Linting
 

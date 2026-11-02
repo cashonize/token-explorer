@@ -2,3 +2,13 @@
 [build]
   command = "pnpm build"
   publish = "dist"
+
+[build.environment]
+  # Vite 8 needs Node ^20.19 || >=22.12; don't depend on the site's original build image default
+  NODE_VERSION = "22"
+
+# Vite's build output in /assets has content-hashed file names
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

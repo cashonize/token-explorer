@@ -22,7 +22,7 @@ Take a look at [the token info of DogeCash](https://tokenexplorer.cash/?tokenId=
 
 On-chain token info (the genesis transaction, genesis supply of FTs, active minting UTXOs, holders and the authchain) is queried from [Chaingraph](https://chaingraph.cash/). The Chaingraph instance defaults to a [public instance](https://gql.chaingraph.pat.mn/v1/graphql) but is configurable via the `NEXT_PUBLIC_CHAINGRAPH_URL` environment variable (read at build time; the `NEXT_PUBLIC_` name is kept from the Next.js version of the app).
 
-Because a Chaingraph instance can serve stale UTXO data (reporting already-spent UTXOs as unspent), the reserved and circulating supply are cross-verified against Electrum Cash servers, which talk to full nodes directly. Electrum is used to confirm which of Chaingraph's UTXOs are actually still unspent; if the two disagree, Electrum's view is used and the discrepancy is surfaced in the UI. Electrum verification is non-blocking: if it fails, the explorer falls back to Chaingraph data labelled as unverified.
+Because a Chaingraph instance can serve stale UTXO data (reporting already-spent UTXOs as unspent), the reserved and circulating supply can optionally be cross-verified against Electrum Cash servers, which talk to full nodes directly. This is off by default and enabled with the "verify supply via Electrum" checkbox in the footer (remembered in the browser). When enabled, Electrum is used to confirm which of Chaingraph's UTXOs are actually still unspent; if the two disagree, Electrum's view is used and the discrepancy is surfaced in the UI. Electrum verification is non-blocking: if it fails, the explorer falls back to Chaingraph data labelled as unverified.
 
 ## Development
 

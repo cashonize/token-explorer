@@ -1,32 +1,10 @@
 {
-  "compilerOptions": {
-    "target": "ESNext",
-    "lib": [
-      "dom",
-      "dom.iterable",
-      "esnext"
-    ],
-    "types": [
-      "vite/client",
-      "node"
-    ],
-    "skipLibCheck": true,
-    "strict": true,
-    "forceConsistentCasingInFileNames": true,
-    "noEmit": true,
-    "esModuleInterop": true,
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "isolatedModules": true,
-    "jsx": "react-jsx",
-    "paths": {
-      "@/*": [
-        "./src/*"
-      ]
-    },
-    "resolveJsonModule": true
-  },
-  "include": [
-    "src"
+  // Solution file: `tsc -b` type-checks both projects (pnpm typecheck / pnpm build).
+  // tsconfig.app.json: the browser app in src/ (vite/client types, no Node types).
+  // tsconfig.node.json: vite.config.ts and test files (Node types).
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
   ]
 }

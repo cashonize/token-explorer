@@ -18,7 +18,9 @@
     <script>window.plausible = window.plausible || function () { (window.plausible.q = window.plausible.q || []).push(arguments) }</script>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Static placeholder until React mounts (replaced by createRoot().render) -->
+    <div id="root"><p class="app-boot">Loading CashToken Explorer…</p></div>
+    <noscript><p class="app-boot">CashToken Explorer needs JavaScript to look up tokens.</p></noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
