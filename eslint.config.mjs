@@ -59,7 +59,7 @@ export default defineConfig([
       // Considered, not enabled:
       // - react/no-array-index-key: every list here is static derived data (OP_RETURN pushes,
       //   diagnostics) where the index is the identity; the rule can't tell them from reorderable lists.
-      // - react/jsx-no-leaked-render: without type-aware linting it flags every `cond && <X/>`,
+      // - react/jsx-no-leaked-render: has no type information, so it flags every `cond && <X/>`,
       //   including booleans (61 hits).
 
       // --- the recommended presets ship these as warnings; make them errors so CI lint is meaningful ---
