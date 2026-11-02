@@ -20,8 +20,11 @@ export function formatTimestamp(unixTimestampNumber: number){
   return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
 
-// Browsers can't open ipfs:// links, so route them through the configured gateway.
-// Other schemes are returned unchanged.
-export function ipfsToGatewayUrl(uri: string){
-  return uri.startsWith('ipfs://') ? IPFS_GATEWAY + uri.slice('ipfs://'.length) : uri;
+// Browsers can't open ipfs:// links, so route them through an HTTPS gateway.
+// The scheme is matched case-insensitively and a redundant leading "ipfs/" is dropped
+// (ipfs://ipfs/<cid>); the rest of the path is kept. Other URIs are returned unchanged.
+export function ipfsToGatewayUrl(uri: string, gateway: string = IPFS_GATEWAY){
+  const trimmed = uri.trim();
+  const prefix = /^ipfs:\/\/(ipfs\/)?/i.exec(trimmed);
+  return prefix ? gateway + trimmed.slice(prefix[0].length) : uri;
 }

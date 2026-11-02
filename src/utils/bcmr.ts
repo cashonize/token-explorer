@@ -1,6 +1,7 @@
 import { binToHex, binToUtf8, decodeAuthenticationInstructions, hexToBin, sha256 } from '@bitauth/libauth'
 import { IPFS_GATEWAY } from '@/constants'
 import { IdentitySnapshotSchema } from './bcmrSchema'
+import { ipfsToGatewayUrl } from './utils'
 import type { Diagnostic, TokenMetadata } from '@/interfaces'
 
 // BCMR implementation (CHIP-BCMR v2), see https://github.com/bitjson/chip-bcmr
@@ -54,7 +55,7 @@ export interface BcmrPublication {
  */
 export function resolveBcmrUri(uri: string, ipfsGateway: string = IPFS_GATEWAY): string | undefined {
   const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(uri)?.[1]?.toLowerCase()
-  if (scheme === 'ipfs') return ipfsGateway + uri.slice('ipfs://'.length)
+  if (scheme === 'ipfs') return ipfsToGatewayUrl(uri, ipfsGateway)
   if (scheme !== undefined && scheme !== 'https') return undefined
 
   let url: URL

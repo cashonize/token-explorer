@@ -38,7 +38,7 @@ export function MetadataDisplay({ metadataInfo, tokenIconUri, tokenType, network
     ? Object.keys(tokenMetadata.uris).filter(uri => uri !== "icon" && uri !== "image" && uri !== "web")
     : []
 
-  // Remember which icon URL failed to load; keyed by URL so a new icon gets a fresh try
+  // Remember which icon URL failed to load, so an icon change while mounted gets a fresh try
   const [failedIconUri, setFailedIconUri] = useState<string | null>(null)
 
   const hasIcon = (tokenMetadata?.uris?.icon || tokenMetadata?.uris?.image) && tokenIconUri && failedIconUri !== tokenIconUri
@@ -47,7 +47,7 @@ export function MetadataDisplay({ metadataInfo, tokenIconUri, tokenType, network
     <div className={`card ${styles.section}`}>
       <div className={styles.tokenHeader}>
         {hasIcon ? (
-          <img key={tokenIconUri} className="tokenImage" src={tokenIconUri} alt={tokenMetadata?.name ?? 'token icon'} onError={() => setFailedIconUri(tokenIconUri)} />
+          <img className="tokenImage" src={tokenIconUri} alt={tokenMetadata?.name ?? 'token icon'} onError={() => setFailedIconUri(tokenIconUri)} />
         ) : (
           <div className="tokenImage" style={{ aspectRatio: '1 / 1', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '2rem', fontWeight: 700 }}>
             {(tokenMetadata?.name ?? '?').charAt(0).toUpperCase()}
