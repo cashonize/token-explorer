@@ -35,6 +35,7 @@ pnpm build        # type check + production build to dist/
 pnpm preview      # serve the production build
 pnpm lint
 pnpm typecheck
+pnpm test         # unit tests (Vitest)
 ```
 
 To use another Chaingraph instance, set the variable when building or starting the dev server, e.g. `NEXT_PUBLIC_CHAINGRAPH_URL=https://example.com/v1/graphql pnpm build`. The site is deployed on Netlify as a static build (see `netlify.toml`).
