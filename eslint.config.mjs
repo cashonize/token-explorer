@@ -12,6 +12,21 @@ export default defineConfig([
   // and Vite's react-refresh preset (only-export-components, so Fast Refresh keeps state).
   js.configs.recommended,
   tseslint.configs.recommended,
+  // Type-aware rules, TS files only (they need type information; eslint.config.mjs has none).
+  // projectService resolves each file through tsconfig.json's references: src/ via
+  // tsconfig.app.json, vite.config.ts and *.test.ts(x) via tsconfig.node.json.
+  {
+    files: ["**/*.{ts,tsx,mts,cts}"],
+    extends: [tseslint.configs.recommendedTypeChecked],
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
+    rules: {
+      // Un-awaited promises must be handled: `await`, `.catch(...)`, or `void` plus a comment
+      // saying where the rejection is caught.
+      "@typescript-eslint/no-floating-promises": "error",
+    },
+  },
   react.configs.flat.recommended,
   react.configs.flat["jsx-runtime"],
   reactRefresh.configs.vite,
@@ -44,7 +59,7 @@ export default defineConfig([
       // Considered, not enabled:
       // - react/no-array-index-key: every list here is static derived data (OP_RETURN pushes,
       //   diagnostics) where the index is the identity; the rule can't tell them from reorderable lists.
-      // - react/jsx-no-leaked-render: without type-aware linting it flags every `cond && <X/>`,
+      // - react/jsx-no-leaked-render: has no type information, so it flags every `cond && <X/>`,
       //   including booleans (61 hits).
 
       // --- the recommended presets ship these as warnings; make them errors so CI lint is meaningful ---

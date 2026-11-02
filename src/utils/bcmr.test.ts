@@ -169,14 +169,16 @@ describe('selectLatestPublication', () => {
     const selection = selectLatestPublication([authbase, first, malformed], TOKEN_ID)
     expect(selection.metadataUpdates).toBe(2)
     expect(selection.publication).toBeUndefined()
-    expect(selection.diagnostic).toMatchObject({ type: 'unresolvable_publication', message: expect.stringMatching(/malformed/) })
+    expect(selection.diagnostic?.type).toBe('unresolvable_publication')
+    expect(selection.diagnostic?.message).toMatch(/malformed/)
   })
 
   it('reports a latest publication with only an http:// URI', () => {
     const httpOnly = entry('05'.repeat(32), bcmrOutput(HASH, 'http://example.com/bcmr.json'))
     const selection = selectLatestPublication([authbase, first, httpOnly], TOKEN_ID)
     expect(selection.publication).toBeUndefined()
-    expect(selection.diagnostic).toMatchObject({ type: 'unresolvable_publication', message: expect.stringMatching(/no URI/) })
+    expect(selection.diagnostic?.type).toBe('unresolvable_publication')
+    expect(selection.diagnostic?.message).toMatch(/no URI/)
     expect(selection.diagnostic?.details).toContain('URIs: http://example.com/bcmr.json')
   })
 })
@@ -204,7 +206,7 @@ describe('parseAuthchainMigrations', () => {
     } as unknown as AuthchainQueryResult
     const [migration] = parseAuthchainMigrations(result)
     expect(migration).toMatchObject({ isMetadataUpdate: true, opReturnHex: malformed })
-    expect(migration.publication).toBeUndefined()
+    expect(migration?.publication).toBeUndefined()
   })
 })
 
@@ -288,7 +290,7 @@ describe('resolveRegistry', () => {
     ...overrides,
   })
   const mockFetch = (body: Uint8Array | string, init?: ResponseInit) =>
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(body as BodyInit, init)))
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(body as BodyInit, init))))
 
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -344,10 +346,10 @@ describe('resolveRegistry', () => {
   })
 
   it('reports a network/CORS failure as fetch_failed', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))))
     const result = await resolveRegistry(publicationFor('x'), TOKEN_ID)
     expect(result.diagnostics).toEqual([expect.objectContaining({ type: 'fetch_failed' })])
-    expect(result.diagnostics[0].message).toMatch(/CORS/)
+    expect(result.diagnostics[0]?.message).toMatch(/CORS/)
   })
 
   it('returns no tokenMetadata when the registry has no identity for the token', async () => {
@@ -364,7 +366,7 @@ describe('resolveRegistry', () => {
     expect(result.isSchemaValid).toBe(false)
     expect(result.tokenMetadata).toEqual({ description: 'no name' })
     expect(result.diagnostics).toEqual([expect.objectContaining({ type: 'schema_invalid' })])
-    expect(result.diagnostics[0].details).toMatch(/^name:/)
+    expect(result.diagnostics[0]?.details).toMatch(/^name:/)
   })
 
   it('does not compare hashes for a CID-only publication', async () => {

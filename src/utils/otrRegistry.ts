@@ -13,7 +13,7 @@ async function fetchOtrRegistry(): Promise<{ registry: ValidatedRegistry | null,
       console.error(`Failed to fetch OTR registry: ${response.status}`)
       return { registry: null, retryable: true }
     }
-    const data = await response.json()
+    const data: unknown = await response.json()
     const result = RegistrySchema.safeParse(data)
     if (!result.success) {
       console.error('OTR registry validation failed:', result.error.issues)

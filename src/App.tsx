@@ -25,6 +25,11 @@ function readTokenIdFromUrl(): string {
   return sanitizeTokenId(new URLSearchParams(window.location.search).get("tokenId") ?? "")
 }
 
+// Chaingraph reports 'none' for immutable NFTs; only minting/mutable outputs reserve supply
+function reservedCapability(capability: 'none' | 'mutable' | 'minting' | null | undefined): ReservedSupplyUtxo['nftCapability'] {
+  return capability === 'minting' || capability === 'mutable' ? capability : null
+}
+
 function readVerifyElectrumSetting(): boolean {
   try {
     return localStorage.getItem('verifyElectrum') === 'true'
@@ -85,9 +90,12 @@ export default function App() {
     })
     // One authchain query feeds both the token info and the BCMR metadata resolution
     const authchainPromise = withTimeout(queryAuthchain(id), 'queryAuthchain')
-    lookUpTokenData(id, authchainPromise, metadataReadyPromise, isCurrent)
-    fetchMetadata(id, authchainPromise, isCurrent)
-    checkOtrStatus(id, isCurrent)
+    // Fire-and-forget: none of these three reject. Each catches its own query errors
+    // (lookUpTokenData / fetchMetadata in try/catch, checkOtrVerified inside fetchOtrRegistry)
+    // and reports them through state.
+    void lookUpTokenData(id, authchainPromise, metadataReadyPromise, isCurrent)
+    void fetchMetadata(id, authchainPromise, isCurrent)
+    void checkOtrStatus(id, isCurrent)
     const params = new URLSearchParams(window.location.search)
     params.set("tokenId", id)
     window.history.replaceState({}, "", `${location.pathname}?${params}`)
@@ -204,6 +212,9 @@ export default function App() {
   ) {
     // Start holder query early so it runs in parallel, but await it in Phase 2
     const holderDataPromise = queryAllTokenHolders(tokenId)
+    // Phase 2 awaits this inside its try; the no-op handler only covers an early return in
+    // Phase 1 (error or superseded search), which would otherwise leave a rejection unhandled
+    holderDataPromise.catch(() => {})
     let network: 'mainnet' | 'chipnet' = 'mainnet'
     let authHead = ''
     let authHeadVout = 0
@@ -223,7 +234,7 @@ export default function App() {
       if (!isCurrent()) return
       const respJsonAuthchain = authchainResult.status === 'fulfilled' ? authchainResult.value : null
       if (!respJsonAuthchain) {
-        const reason = authchainResult.status === 'rejected' ? authchainResult.reason : 'query returned null'
+        const reason: unknown = authchainResult.status === 'rejected' ? authchainResult.reason : 'query returned null'
         console.error("Error fetching authchain from Chaingraph:", reason)
         setTokenInfoError("Failed to load core token data from Chaingraph")
         setIsLoadingTokenInfo(false)
@@ -267,11 +278,11 @@ export default function App() {
       // Parse reserved supply UTXOs (minting + mutable NFT UTXOs) — only if the query succeeded
       const reservedSupplyUtxos: ReservedSupplyUtxo[] = respJsonIssuingUtxos
         ? respJsonIssuingUtxos.output.map(o => ({
-            txHash: (o.transaction_hash as string).slice(2),
+            txHash: o.transaction_hash.slice(2),
             vout: Number(o.output_index),
-            lockingBytecode: (o.locking_bytecode as string).slice(2),
+            lockingBytecode: o.locking_bytecode.slice(2),
             fungibleTokenAmount: BigInt(o.fungible_token_amount ?? "0"),
-            nftCapability: o.nonfungible_token_capability as 'minting' | 'mutable'
+            nftCapability: reservedCapability(o.nonfungible_token_capability)
           }))
         : []
       const hasActiveMintingToken = reservedSupplyUtxos.some(utxo => utxo.nftCapability === "minting")
@@ -288,7 +299,7 @@ export default function App() {
       authHead = authheadData?.hash?.slice(2) ?? ''
 
       const authheadReservedFT = BigInt(identityOutput?.fungible_token_amount ?? 0)
-      const authHeadLockingBytecode = identityOutput?.locking_bytecode as string | undefined
+      const authHeadLockingBytecode = identityOutput?.locking_bytecode
 
       // Check if the authhead's identity output (output 0) is an OP_RETURN.
       // If so, the authchain is burned — it can never be extended since OP_RETURN is unspendable.
@@ -298,9 +309,8 @@ export default function App() {
       // Parse authhead timestamp and check if it's a metadata update
       const authHeadBlockTimestamp = authheadData?.block_inclusions?.[0]?.block?.timestamp
       const authHeadTimestamp = authHeadBlockTimestamp ? Number(authHeadBlockTimestamp) : undefined
-      const authHeadOutputs = authheadData?.outputs as Array<{ output_index: number, locking_bytecode: string }> | undefined
-      const authHeadIsMetadataUpdate = authHeadOutputs?.some(
-        output => isBcmrOutput(output.locking_bytecode?.slice(2) ?? '')
+      const authHeadIsMetadataUpdate = authheadData?.outputs.some(
+        output => isBcmrOutput(output.locking_bytecode.slice(2))
       ) ?? false
 
       let usesAuthGuard = false
@@ -367,7 +377,7 @@ export default function App() {
           vout: authHeadVout,
           lockingBytecode: authHeadLockingBytecode.slice(2),
           fungibleTokenAmount: authheadReservedFT,
-          nftCapability: identityOutput?.nonfungible_token_capability as 'minting' | 'mutable' | null ?? null,
+          nftCapability: reservedCapability(identityOutput?.nonfungible_token_capability),
           isAuthhead: true
         })
       }
@@ -437,9 +447,7 @@ export default function App() {
       }
 
       // Calculate totalSupplyNFTs
-      const totalSupplyNFTs = allTokenOutputs.filter(
-        (o: { nonfungible_token_capability: string | null }) => o.nonfungible_token_capability !== null
-      ).length
+      const totalSupplyNFTs = allTokenOutputs.filter(o => o.nonfungible_token_capability !== null).length
 
       // Calculate supply stats
       const totalSupplyFT = calculateTotalSupplyFT(allTokenOutputs)

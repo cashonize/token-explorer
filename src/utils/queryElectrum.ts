@@ -46,7 +46,7 @@ export async function verifySupplyViaElectrum(
   // Build Chaingraph UTXO map for matching + lookup
   const chaingraphUtxoByKey = new Map<string, ChaingraphOutput>()
   for (const output of chaingraphOutputs) {
-    const txHash = (output.transaction_hash as string).slice(2) // remove \x prefix
+    const txHash = output.transaction_hash.slice(2) // remove \x prefix
     const vout = output.output_index
     chaingraphUtxoByKey.set(`${txHash}:${vout}`, output)
   }

@@ -44,7 +44,7 @@ function AuthchainTimeline({ entries, genesisTx, authHead, authHeadBurned }: { e
                 <span style={{ color: 'var(--text-muted)' }}>tx:</span>{' '}
                 <HashLink hash={entry.txHash} href={BLOCK_EXPLORER_URL + entry.txHash} truncate />
               </div>
-              {entry.timestamp && (
+              {entry.timestamp != null && (
                 <div style={{ color: 'var(--text-muted)' }}>{formatTimestamp(entry.timestamp)}</div>
               )}
               {publication && (
@@ -97,7 +97,7 @@ function LatestPublicationOutput({ migrations, lastMetadataUpdateTimestamp }: {
 
   return (
     <>
-      {lastMetadataUpdateTimestamp && (
+      {lastMetadataUpdateTimestamp != null && (
         <Rows>
           <Row label="Last metadata update">{formatTimestamp(lastMetadataUpdateTimestamp)}</Row>
         </Rows>
@@ -208,7 +208,7 @@ export function AuthchainInfo({ tokenInfo, metadataInfo, electrumVerification }:
                 <div className="note note-warn" style={{ marginTop: '8px' }}>authhead UTXO not found via Electrum — may be spent (Chaingraph stale)</div>
               )}
             </Row>
-            {tokenInfo.authHeadTimestamp && (
+            {tokenInfo.authHeadTimestamp != null && (
               <Row label="Last authchain update">
                 {formatTimestamp(tokenInfo.authHeadTimestamp)}{' '}
                 <span style={{ color: 'var(--text-muted)' }}>
