@@ -6,7 +6,7 @@ import { queryGenesisInfo, queryIssuingUtxos, queryAuthchain, queryAllTokenHolde
 import { countUniqueHolders, calculateTotalSupplyFT } from '../utils/calculations'
 import { checkOtrVerified } from '../utils/otrRegistry'
 import { sanitizeTokenId, ipfsToGatewayUrl } from '../utils/utils'
-import { isBcmrOutput, resolveRegistry, type RegistryResolution } from '../utils/bcmr'
+import { isBcmrOutput, resolveRegistry, selectLatestPublication, type RegistryResolution } from '../utils/bcmr'
 import type { TokenInfo, ExtendedTokenInfo, MetadataInfo, ReservedSupplyUtxo, ElectrumVerification } from '@/interfaces'
 import { EXAMPLE_TOKENS } from '@/constants'
 import { verifySupplyViaElectrum } from '@/utils/queryElectrum'
@@ -175,27 +175,14 @@ export default function Home() {
 
     try {
       const migrations = parseAuthchainMigrations(await authchainPromise)
-      // Chaingraph's authchain can start before the token's authbase (the tokenId tx); ignore those
-      const authbaseIndex = migrations.findIndex(m => m.txHash === tokenId)
-      const metadataUpdates = migrations.slice(Math.max(authbaseIndex, 0)).filter(m => m.isMetadataUpdate)
-      authchainUpdates = metadataUpdates.length
-
-      // Per spec only the latest publication counts: if it can't be used, don't fall back to an older registry
-      const latestUpdate = metadataUpdates.at(-1)
-      const publication = latestUpdate?.publication
-      if (publication?.httpsUrl) {
+      const { metadataUpdates, publication, diagnostic } = selectLatestPublication(migrations, tokenId)
+      authchainUpdates = metadataUpdates
+      if (publication) {
         httpsUrl = publication.httpsUrl
         metaDataLocation = publication.resolvedUri
         resolution = await resolveRegistry(publication, tokenId)
-      } else if (latestUpdate) {
-        resolution.diagnostics.push({
-          type: 'unresolvable_publication',
-          message: publication
-            ? 'The latest BCMR publication has no URI the explorer can fetch (only https://, ipfs:// and protocol-less URIs are supported).'
-            : 'The latest BCMR publication output is malformed (no content hash push, or a truncated push).',
-          details: `tx: ${latestUpdate.txHash}\noutput: ${latestUpdate.opReturnHex}` +
-            (publication?.uris.length ? `\nURIs: ${publication.uris.join(', ')}` : '')
-        })
+      } else if (diagnostic) {
+        resolution.diagnostics.push(diagnostic)
       }
     } catch (error) {
       console.log(error)

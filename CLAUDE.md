@@ -36,12 +36,12 @@ BCMR is the metadata standard for CashTokens on BCH. It uses "authchains" (zerot
 ### BCMR Resolution
 
 `src/utils/bcmr.ts` is the explorer's own BCMR implementation (it replaced `@mainnet-cash/bcmr`):
-- `isBcmrOutput()` / `parseBcmrPublication()` - detect and decode publication outputs (`OP_RETURN <'BCMR'> <sha256> <uri>...`, prefix exactly `6a0442434d52` per spec). The non-spec mainnet-js form `OP_RETURN <'BCMR'> <utf8 IPFS CID>` is recognised and flagged `isCidOnly`; a spec hash-only publication (no URIs) has no fetchable URL
+- `isBcmrOutput()` / `parseBcmrPublication()` - detect and decode publication outputs (`OP_RETURN <'BCMR'> <sha256> <uri>...`, prefix exactly `6a0442434d52` per spec). The non-spec mainnet-js form `OP_RETURN <'BCMR'> <utf8 IPFS CID>` is recognised and flagged `isCidOnly`; a spec hash-only publication (no URIs) has no fetchable URL. Outputs with a truncated push, a non-push opcode after OP_RETURN, or a hash push that isn't 32 bytes (other than the CID form) are rejected as malformed
 - `resolveBcmrUri()` - `ipfs://` via `IPFS_GATEWAY`, protocol-less URIs (incl. `host:port/...`) as HTTPS, a domain without a path to `/.well-known/bitcoin-cash-metadata-registry.json`; other protocols (e.g. `http://`) are skipped
 - `resolveRegistry()` - fetches the registry once, checks the sha256 over the raw response bytes, parses JSON, selects the snapshot and Zod-validates it, returning structured diagnostics
 - `getCurrentSnapshot()` - per spec: the snapshot with the latest reached timestamp, or the oldest one if none is reached yet; first key only if no key is an ISO timestamp
 
-`fetchMetadata()` only resolves the **latest** metadata-update migration (from the tokenId tx onward). If that publication is malformed or has no fetchable URI it reports an `unresolvable_publication` diagnostic rather than falling back to an older registry.
+`fetchMetadata()` only resolves the **latest** metadata-update migration (from the tokenId tx onward), picked by `selectLatestPublication()` in `bcmr.ts`. If that publication is malformed or has no fetchable URI it reports an `unresolvable_publication` diagnostic rather than falling back to an older registry.
 
 ### OTR (OpenTokenRegistry) Verification
 

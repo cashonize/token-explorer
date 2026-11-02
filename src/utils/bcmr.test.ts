@@ -7,8 +7,11 @@ import {
   parseOpReturnPushes,
   resolveBcmrUri,
   resolveRegistry,
+  selectLatestPublication,
   type BcmrPublication,
 } from './bcmr'
+import { parseAuthchainMigrations, type AuthchainQueryResult } from './queryChainGraph'
+import type { AuthchainEntry } from '@/interfaces'
 
 const GATEWAY = 'https://gateway.test/ipfs/'
 const HASH = 'ab'.repeat(32)
@@ -64,7 +67,8 @@ describe('parseBcmrPublication', () => {
   it('decodes a URI longer than 75 bytes (PUSHDATA1)', () => {
     const uri = `example.com/${'a'.repeat(80)}.json`
     const output = bcmrOutput(HASH, uri)
-    expect(output).toContain('4c') // PUSHDATA1 opcode is used
+    // OP_RETURN (1 byte) + 'BCMR' push (5) + hash push (33), then the URI push opcode
+    expect(output.slice(78, 80)).toBe('4c') // PUSHDATA1
     expect(parseBcmrPublication(output)?.httpsUrl).toBe(`https://${uri}`)
   })
 
@@ -102,9 +106,104 @@ describe('parseBcmrPublication', () => {
     expect(parseBcmrPublication('6a4c0442434d52' + '20' + HASH)).toBeUndefined() // PUSHDATA1 'BCMR'
   })
 
+  // Regression test: a truncated URI push used to be dropped silently, turning the
+  // output into a seemingly valid hash-only publication
   it('returns undefined when a URI push is truncated', () => {
     const output = bcmrOutput(HASH) + '40' + binToHex(utf8ToBin('example.com'))
     expect(parseBcmrPublication(output)).toBeUndefined()
+  })
+
+  it.each([
+    ['OP_NOP', '61'],
+    ['OP_1', '51'],
+  ])('returns undefined when a non-push opcode (%s) follows OP_RETURN', (_, opcode) => {
+    expect(parseBcmrPublication(bcmrOutput(HASH, 'example.com') + opcode)).toBeUndefined()
+  })
+
+  it('returns undefined for an OP_0 hash push', () => {
+    expect(parseBcmrPublication('6a' + pushUtf8('BCMR') + '00' + pushUtf8('example.com'))).toBeUndefined()
+  })
+
+  it('returns undefined for a hash push that is not 32 bytes', () => {
+    expect(parseBcmrPublication(bcmrOutput('ab'.repeat(31), 'example.com'))).toBeUndefined()
+    expect(parseBcmrPublication(bcmrOutput('ab'.repeat(33), 'example.com'))).toBeUndefined()
+  })
+})
+
+describe('parseOpReturnPushes (lenient, for display)', () => {
+  it('skips non-push opcodes instead of rejecting the output', () => {
+    expect(parseOpReturnPushes('6a' + '02abcd' + '61' + '01ef')).toEqual(['abcd', 'ef'])
+  })
+})
+
+describe('selectLatestPublication', () => {
+  const TOKEN_ID = 'cd'.repeat(32)
+  const entry = (txHash: string, opReturnHex?: string): AuthchainEntry => ({
+    txHash,
+    isMetadataUpdate: opReturnHex !== undefined,
+    opReturnHex,
+    publication: opReturnHex ? parseBcmrPublication(opReturnHex) : undefined,
+  })
+  const funding = entry('aa'.repeat(32), bcmrOutput(HASH, 'pre-authbase.example/bcmr.json'))
+  const authbase = entry(TOKEN_ID)
+  const first = entry('01'.repeat(32), bcmrOutput(HASH, 'example.com/v1.json'))
+  const transfer = entry('02'.repeat(32))
+  const second = entry('03'.repeat(32), bcmrOutput(HASH, 'example.com/v2.json'))
+
+  it('picks the latest metadata update and counts updates from the authbase onward', () => {
+    const selection = selectLatestPublication([funding, authbase, first, transfer, second], TOKEN_ID)
+    expect(selection.metadataUpdates).toBe(2)
+    expect(selection.latestUpdate).toBe(second)
+    expect(selection.publication?.httpsUrl).toBe('https://example.com/v2.json')
+    expect(selection.diagnostic).toBeUndefined()
+  })
+
+  it('ignores metadata updates before the authbase', () => {
+    const selection = selectLatestPublication([funding, authbase, transfer], TOKEN_ID)
+    expect(selection).toEqual({ metadataUpdates: 0, latestUpdate: undefined, publication: undefined })
+  })
+
+  it('reports a malformed latest publication without falling back to an older one', () => {
+    const malformed = entry('04'.repeat(32), '6a0442434d52')
+    const selection = selectLatestPublication([authbase, first, malformed], TOKEN_ID)
+    expect(selection.metadataUpdates).toBe(2)
+    expect(selection.publication).toBeUndefined()
+    expect(selection.diagnostic).toMatchObject({ type: 'unresolvable_publication', message: expect.stringMatching(/malformed/) })
+  })
+
+  it('reports a latest publication with only an http:// URI', () => {
+    const httpOnly = entry('05'.repeat(32), bcmrOutput(HASH, 'http://example.com/bcmr.json'))
+    const selection = selectLatestPublication([authbase, first, httpOnly], TOKEN_ID)
+    expect(selection.publication).toBeUndefined()
+    expect(selection.diagnostic).toMatchObject({ type: 'unresolvable_publication', message: expect.stringMatching(/no URI/) })
+    expect(selection.diagnostic?.details).toContain('URIs: http://example.com/bcmr.json')
+  })
+})
+
+describe('parseAuthchainMigrations', () => {
+  it('treats the first BCMR-prefixed output as definitive, even when it is malformed', () => {
+    const malformed = '6a0442434d52' // no hash push
+    const valid = bcmrOutput(HASH, 'example.com/bcmr.json')
+    const result = {
+      transaction: [{
+        authchains: [{
+          migrations: [{
+            migration_index: '0',
+            transaction: {
+              hash: '\\x' + '01'.repeat(32),
+              block_inclusions: [],
+              outputs: [
+                { output_index: '0', locking_bytecode: '\\x' + malformed },
+                { output_index: '1', locking_bytecode: '\\x' + valid },
+              ],
+            },
+          }],
+        }],
+      }],
+    } as unknown as AuthchainQueryResult
+    const [migration] = parseAuthchainMigrations(result)
+    expect(migration).toMatchObject({ isMetadataUpdate: true, opReturnHex: malformed })
+    expect(migration.publication).toBeUndefined()
   })
 })
 
