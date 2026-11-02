@@ -11,6 +11,7 @@ pnpm build        # Production build
 pnpm start        # Start production server
 pnpm lint         # Run ESLint
 pnpm typecheck    # Run TypeScript type checking (includes JSX/TSX)
+pnpm test         # Run unit tests (Vitest, src/**/*.test.ts)
 ```
 
 ## Architecture Overview

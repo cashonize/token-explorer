@@ -192,7 +192,7 @@ export default function Home() {
           type: 'unresolvable_publication',
           message: publication
             ? 'The latest BCMR publication has no URI the explorer can fetch (only https://, ipfs:// and protocol-less URIs are supported).'
-            : 'The latest BCMR publication output is malformed (it has no content hash push).',
+            : 'The latest BCMR publication output is malformed (no content hash push, or a truncated push).',
           details: `tx: ${latestUpdate.txHash}\noutput: ${latestUpdate.opReturnHex}` +
             (publication?.uris.length ? `\nURIs: ${publication.uris.join(', ')}` : '')
         })

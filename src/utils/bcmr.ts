@@ -78,6 +78,9 @@ export function resolveBcmrUri(uri: string, ipfsGateway: string = IPFS_GATEWAY):
  */
 export function parseBcmrPublication(lockingBytecodeHex: string): BcmrPublication | undefined {
   if (!isBcmrOutput(lockingBytecodeHex)) return undefined
+  // A truncated push would otherwise silently drop the URIs and look like a hash-only publication
+  const instructions = decodeAuthenticationInstructions(hexToBin(lockingBytecodeHex))
+  if (instructions.some(instruction => 'malformed' in instruction && instruction.malformed)) return undefined
   const pushes = parseOpReturnPushes(lockingBytecodeHex)
   const [, hashPush, ...uriPushes] = pushes
   if (hashPush === undefined) return undefined
