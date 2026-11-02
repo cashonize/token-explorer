@@ -1,3 +1,5 @@
+import { IPFS_GATEWAY } from '@/constants';
+
 // Pasted tokenIds often carry surrounding whitespace/newlines (or an "0x" prefix
 // copied from a block explorer), which would end up in the query and the URL.
 export function sanitizeTokenId(input: string){
@@ -16,4 +18,10 @@ export function formatTimestamp(unixTimestampNumber: number){
   const minutes = String(date.getUTCMinutes()).padStart(2, '0');
 
   return `${year}-${month}-${day} ${hours}:${minutes}`;
+}
+
+// Browsers can't open ipfs:// links, so route them through the configured gateway.
+// Other schemes are returned unchanged.
+export function ipfsToGatewayUrl(uri: string){
+  return uri.startsWith('ipfs://') ? IPFS_GATEWAY + uri.slice('ipfs://'.length) : uri;
 }

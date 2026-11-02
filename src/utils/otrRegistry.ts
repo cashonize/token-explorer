@@ -29,7 +29,12 @@ export async function checkOtrVerified(tokenId: string): Promise<boolean> {
   if (!otrRegistry) {
     // Avoid multiple concurrent fetches
     if (!otrRegistryPromise) {
-      otrRegistryPromise = fetchOtrRegistry()
+      const promise = fetchOtrRegistry()
+      otrRegistryPromise = promise
+      // Don't cache a failed fetch: clear the shared promise so the next lookup retries
+      promise.then(result => {
+        if (!result && otrRegistryPromise === promise) otrRegistryPromise = null
+      })
     }
     otrRegistry = await otrRegistryPromise
   }
