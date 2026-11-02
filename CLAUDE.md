@@ -6,19 +6,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 pnpm install      # Install dependencies
-pnpm dev          # Start development server (http://localhost:3000)
-pnpm build        # Production build
-pnpm start        # Start production server
-pnpm lint         # Run ESLint
+pnpm dev          # Start Vite dev server (http://localhost:5173)
+pnpm build        # Type check, then production build to dist/
+pnpm preview      # Serve the dist/ build locally
+pnpm lint         # Run ESLint (flat config, fails on any warning)
 pnpm typecheck    # Run TypeScript type checking (includes JSX/TSX)
 pnpm test         # Run unit tests (Vitest, src/**/*.test.ts)
 ```
 
 ## Architecture Overview
 
-This is a Next.js 15 application (Pages Router) that explores CashTokens metadata on Bitcoin Cash mainnet & chipnet. It displays BCMR (Bitcoin Cash Metadata Registries) token information including genesis supply, NFT counts, circulating supply, authchain data, and metadata verification.
+This is a client-side React single-page app built with Vite that explores CashTokens metadata on Bitcoin Cash mainnet & chipnet. It displays BCMR (Bitcoin Cash Metadata Registries) token information including genesis supply, NFT counts, circulating supply, authchain data, and metadata verification. There is one page: a token is looked up via `?tokenId=<txid>`.
 
 BCMR is the metadata standard for CashTokens on BCH. It uses "authchains" (zeroth-descendant transaction chains) to authenticate and update metadata on-chain. Spec: https://github.com/bitjson/chip-bcmr
+
+### Build & Hosting
+
+- `index.html` (repo root) holds the head tags, an inline pre-paint script that applies a stored `theme` from localStorage as `data-theme` (no stored value: `prefers-color-scheme` in `globals.css` decides), and the Plausible analytics script (`data-domain="tokenexplorer.cash"`, plausible.io, which ignores localhost). `src/main.tsx` mounts `src/App.tsx` in `<StrictMode>` and imports `src/styles/globals.css`; component styles are CSS modules.
+- Nothing is prerendered, so state that depends on the browser is read in lazy `useState` initializers on first render: the theme (`ThemeToggle`), the `verifyElectrum` toggle, and the initial `?tokenId=` (which also starts the app in the loading state, so a token URL renders the compact header straight away). The search for the initial tokenId runs from a mount effect via `useEffectEvent`.
+- `vite.config.ts`: `@/` alias to `src/`, `build.target: 'es2022'` (`@bitauth/libauth` instantiates its WASM with top-level await).
+- Env: `envPrefix` is `['VITE_', 'NEXT_PUBLIC_']` so the variable name `NEXT_PUBLIC_CHAINGRAPH_URL` from the Next.js era still works (read as `import.meta.env.NEXT_PUBLIC_CHAINGRAPH_URL` in `src/constants.ts`, typed in `src/vite-env.d.ts`). It is inlined at build time.
+- Hosted on Netlify as a static site: `netlify.toml` builds with `pnpm build` and publishes `dist/`.
+
+### Linting
+
+ESLint CLI with a flat config in `eslint.config.mjs`: `@eslint/js` and `typescript-eslint` recommended, `eslint-plugin-react` recommended (+ `jsx-runtime`), `eslint-plugin-react-refresh` (Vite preset, `only-export-components`), the `eslint-plugin-react-hooks` 7 recommended preset (incl. the React-Compiler-derived rules such as `set-state-in-effect`, `refs`, `purity`, `static-components`) with `rules-of-hooks`/`exhaustive-deps` as errors, a few bug-catching `eslint-plugin-react` rules (`jsx-key`, `no-unstable-nested-components`, `no-danger`, `jsx-no-target-blank`), and the `jsx-a11y` rules that `eslint-config-next` used to provide. Rules turned off or considered and not enabled carry a one-line reason in the config. `pnpm lint` runs with `--max-warnings 0` and unused disable directives are errors. Inline disables use ESLint's native reason form on the directive itself: `// eslint-disable-next-line <rule> -- <reason>`. Global ignores are depth-independent (`**/dist/**` etc.) and include `.claude/**`, since flat config doesn't read `.gitignore`.
 
 ### Key Data Flow
 
@@ -89,7 +101,7 @@ There are two supply calculations displayed in the UI:
 
 Some Chaingraph instances can serve stale UTXO data — reporting spent UTXOs as still unspent. To detect and correct this, the app can cross-verify token UTXOs via Electrum Cash servers which talk to full nodes directly. See `src/utils/queryElectrum.ts`.
 
-**Toggle:** Electrum verification is **off by default** (the default Chaingraph instance is stable; verification slows down loading). It's enabled via a "verify supply via Electrum" checkbox in the footer, persisted in localStorage under the key `verifyElectrum`. It remains valuable as a debugging tool and for users pointing the app at their own Chaingraph instance. Implementation in `src/pages/index.tsx`: Phase 3 stores its arguments in `electrumArgsRef` and only runs when the toggle is on; ticking the checkbox while a token is loaded runs verification retroactively for that token, and unticking clears the Electrum results.
+**Toggle:** Electrum verification is **off by default** (the default Chaingraph instance is stable; verification slows down loading). It's enabled via a "verify supply via Electrum" checkbox in the footer, persisted in localStorage under the key `verifyElectrum`. It remains valuable as a debugging tool and for users pointing the app at their own Chaingraph instance. Implementation in `src/App.tsx`: Phase 3 stores its arguments in `electrumArgsRef` and only runs when the toggle is on; ticking the checkbox while a token is loaded runs verification retroactively for that token, and unticking clears the Electrum results.
 
 **Flow (when enabled):**
 1. After `queryAllTokenHolders` completes (Phase 2), collect all unique locking bytecodes from the results

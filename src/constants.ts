@@ -2,7 +2,7 @@
 // for tokens with many UTXOs), which surfaces as missing reserved-supply data.
 // Override via NEXT_PUBLIC_CHAINGRAPH_URL to point at a more powerful instance.
 export const CHAINGRAPH_URL =
-  process.env.NEXT_PUBLIC_CHAINGRAPH_URL ?? "https://gql.chaingraph.pat.mn/v1/graphql";
+  import.meta.env.NEXT_PUBLIC_CHAINGRAPH_URL ?? "https://gql.chaingraph.pat.mn/v1/graphql";
 // dweb.link, along with ipfs.io, w3s.link and nftstorage.link, is one backend behind
 // Cloudflare bot management: on a challenged connection every request gets a 403
 // challenge page, so metadata fetches and token icons fail. filebase serves the

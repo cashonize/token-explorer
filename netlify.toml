@@ -1,0 +1,4 @@
+# Static Vite build; these settings override the build settings in the Netlify UI.
+[build]
+  command = "pnpm build"
+  publish = "dist"

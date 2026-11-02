@@ -144,13 +144,6 @@
   }
 }
 
-/* When loading directly to a ?tokenId= URL, the pre-paint script (see _document)
-   sets data-has-token so the hero renders in its compact form before first paint,
-   avoiding a landing→compact flash. Values mirror .heroCompact / .titleCompact. */
-html[data-has-token] .app-landing-only { display: none !important; }
-html[data-has-token] .app-hero { padding-top: 32px; padding-bottom: 20px; }
-html[data-has-token] .app-title { font-size: 1.4rem; }
-
 * {
   box-sizing: border-box;
   padding: 0;

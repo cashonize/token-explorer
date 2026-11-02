@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CashToken Explorer</title>
+    <meta name="description" content="Explore CashTokens metadata, supply, holders and authchain on Bitcoin Cash" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <script>
+      // Apply a stored theme choice before first paint; without one, prefers-color-scheme decides (globals.css)
+      try {
+        var theme = localStorage.getItem('theme')
+        if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme
+      } catch (e) {}
+    </script>
+    <script defer data-domain="tokenexplorer.cash" src="https://plausible.io/js/script.js"></script>
+    <script>window.plausible = window.plausible || function () { (window.plausible.q = window.plausible.q || []).push(arguments) }</script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
