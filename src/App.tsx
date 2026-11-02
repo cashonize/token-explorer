@@ -1,12 +1,11 @@
-import Head from 'next/head'
 import styles from '@/styles/Home.module.css'
 import { hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth'
-import React, { useEffect, useRef, useState } from 'react'
-import { queryGenesisInfo, queryIssuingUtxos, queryAuthchain, queryAllTokenHolders, queryGenesisCategories, parseAuthchainMigrations, type AuthchainQueryResult } from '../utils/queryChainGraph'
-import { countUniqueHolders, calculateTotalSupplyFT } from '../utils/calculations'
-import { checkOtrVerified } from '../utils/otrRegistry'
-import { sanitizeTokenId, ipfsToGatewayUrl } from '../utils/utils'
-import { isBcmrOutput, resolveRegistry, selectLatestPublication, type RegistryResolution } from '../utils/bcmr'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
+import { queryGenesisInfo, queryIssuingUtxos, queryAuthchain, queryAllTokenHolders, queryGenesisCategories, parseAuthchainMigrations, type AuthchainQueryResult } from '@/utils/queryChainGraph'
+import { countUniqueHolders, calculateTotalSupplyFT } from '@/utils/calculations'
+import { checkOtrVerified } from '@/utils/otrRegistry'
+import { sanitizeTokenId, ipfsToGatewayUrl } from '@/utils/utils'
+import { isBcmrOutput, resolveRegistry, selectLatestPublication, type RegistryResolution } from '@/utils/bcmr'
 import type { TokenInfo, ExtendedTokenInfo, MetadataInfo, ReservedSupplyUtxo, ElectrumVerification } from '@/interfaces'
 import { EXAMPLE_TOKENS } from '@/constants'
 import { verifySupplyViaElectrum } from '@/utils/queryElectrum'
@@ -21,20 +20,34 @@ const withTimeout = <T,>(p: Promise<T>, label: string): Promise<T> =>
     )
   ])
 
-export default function Home() {
-  const [tokenId, setTokenId] = useState<string>("")
-  const [isLoadingTokenInfo, setIsLoadingTokenInfo] = useState<boolean>(false)
+// The tokenId in the URL the page was opened with (searched on mount)
+function readTokenIdFromUrl(): string {
+  return sanitizeTokenId(new URLSearchParams(window.location.search).get("tokenId") ?? "")
+}
+
+function readVerifyElectrumSetting(): boolean {
+  try {
+    return localStorage.getItem('verifyElectrum') === 'true'
+  } catch {
+    return false
+  }
+}
+
+export default function App() {
+  const [initialTokenId] = useState(readTokenIdFromUrl)
+  const [tokenId, setTokenId] = useState<string>(initialTokenId)
+  // Start in the loading state when opened with ?tokenId=, so the first render already shows the compact hero
+  const [isLoadingTokenInfo, setIsLoadingTokenInfo] = useState<boolean>(initialTokenId !== "")
   const [tokenInfo, setTokenInfo] = useState<TokenInfo>()
   const [extendedTokenInfo, setExtendedTokenInfo] = useState<ExtendedTokenInfo>()
   const [tokenInfoError, setTokenInfoError] = useState<string>()
   const [extendedTokenInfoError, setExtendedTokenInfoError] = useState<string>()
   const [metadataInfo, setMetadataInfo] = useState<MetadataInfo>()
-  const [tokenIconUri, setTokenIconUri] = useState<string>("")
   const [electrumVerification, setElectrumVerification] = useState<ElectrumVerification>()
-  const [verifyElectrum, setVerifyElectrum] = useState<boolean>(false)
+  const [verifyElectrum, setVerifyElectrum] = useState<boolean>(readVerifyElectrumSetting)
 
   // Mirrors verifyElectrum for async code (Phase 3 runs long after the closure was created)
-  const verifyElectrumRef = useRef(false)
+  const verifyElectrumRef = useRef(verifyElectrum)
   // Phase-3 arguments, kept so enabling the toggle mid-view can still verify the loaded token
   const electrumArgsRef = useRef<Parameters<typeof verifySupplyViaElectrum> | null>(null)
   // Search generation of the Electrum run in flight (null when idle), so a run for an
@@ -44,35 +57,12 @@ export default function Home() {
   // compares against it and drops its results instead of overwriting the current view
   const searchGenerationRef = useRef(0)
 
+  const searchInitialToken = useEffectEvent(() => {
+    if (initialTokenId) searchToken(initialTokenId)
+  })
   useEffect(() => {
-    const stored = localStorage.getItem('verifyElectrum') === 'true'
-    setVerifyElectrum(stored)
-    verifyElectrumRef.current = stored
+    searchInitialToken()
   }, [])
-
-  useEffect(() => {
-    const url = new URL(window.location.href)
-    const params = new URLSearchParams(url.search)
-    const readTokenId = sanitizeTokenId(params.get("tokenId") ?? "")
-    // The pre-paint script (see _document) sets data-has-token so the hero renders
-    // compact before first paint; React now owns the UI, so clear it.
-    document.documentElement.removeAttribute("data-has-token")
-    if (!readTokenId) return
-    searchToken(readTokenId)
-  }, [])
-
-  useEffect(() => {
-    const imageOrIconUri = metadataInfo?.tokenMetadata?.uris?.image ?? metadataInfo?.tokenMetadata?.uris?.icon
-    if (imageOrIconUri) {
-      setTokenIconUri(ipfsToGatewayUrl(imageOrIconUri))
-    }
-  }, [metadataInfo])
-
-  useEffect(() => {
-    if (tokenInfo) {
-      setIsLoadingTokenInfo(false)
-    }
-  }, [tokenInfo])
 
   // Resolves when metadata has been set, so lookUpTokenData can wait briefly for it
   const metadataReadyRef = useRef<{ resolve: () => void } | null>(null)
@@ -87,7 +77,6 @@ export default function Home() {
     setExtendedTokenInfo(undefined)
     setExtendedTokenInfoError(undefined)
     setMetadataInfo(undefined)
-    setTokenIconUri("")
     setElectrumVerification(undefined)
     electrumArgsRef.current = null
     setIsLoadingTokenInfo(true)
@@ -112,7 +101,6 @@ export default function Home() {
     setExtendedTokenInfo(undefined)
     setExtendedTokenInfoError(undefined)
     setMetadataInfo(undefined)
-    setTokenIconUri("")
     setElectrumVerification(undefined)
     electrumArgsRef.current = null
     setIsLoadingTokenInfo(false)
@@ -153,7 +141,11 @@ export default function Home() {
   function toggleVerifyElectrum(enabled: boolean) {
     setVerifyElectrum(enabled)
     verifyElectrumRef.current = enabled
-    localStorage.setItem('verifyElectrum', String(enabled))
+    try {
+      localStorage.setItem('verifyElectrum', String(enabled))
+    } catch {
+      // localStorage unavailable: the setting applies to this page view only
+    }
     if (enabled) {
       if (!electrumVerification) runElectrumVerification()
     } else {
@@ -405,6 +397,7 @@ export default function Home() {
         genesisInfoError,
         issuingUtxosError
       })
+      setIsLoadingTokenInfo(false)
     } catch (error) {
       console.error("Error in initial data load:", error)
       if (!isCurrent()) return
@@ -484,21 +477,17 @@ export default function Home() {
     return 'CashToken'
   }
 
+  const imageOrIconUri = metadataInfo?.tokenMetadata?.uris?.image ?? metadataInfo?.tokenMetadata?.uris?.icon
+  const tokenIconUri = imageOrIconUri ? ipfsToGatewayUrl(imageOrIconUri) : ""
+
   const showResults = tokenInfo && tokenInfo.validTokenCategory
   const compact = !!tokenInfo || isLoadingTokenInfo
 
   return (
     <>
-      <Head>
-        <title>CashToken Explorer</title>
-        <meta name="description" content="Explore CashTokens metadata, supply, holders and authchain on Bitcoin Cash" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-        <link rel="icon" href="/favicon.ico" sizes="any" />
-      </Head>
       <main className={styles.page}>
         <ThemeToggle />
-        <header className={`${styles.hero} app-hero ${compact ? styles.heroCompact : ''}`}>
+        <header className={`${styles.hero} ${compact ? styles.heroCompact : ''}`}>
           <button
             type="button"
             className={styles.brand}
@@ -506,10 +495,10 @@ export default function Home() {
             aria-label="Back to home"
           >
             <span className={styles.brandMark}>₿</span>
-            <h1 className={`${styles.title} app-title ${compact ? styles.titleCompact : ''}`}>CashToken Explorer</h1>
+            <h1 className={`${styles.title} ${compact ? styles.titleCompact : ''}`}>CashToken Explorer</h1>
           </button>
           {!compact && (
-            <p className={`${styles.subtitle} app-landing-only`}>
+            <p className={styles.subtitle}>
               Explore CashTokens metadata, supply, holders and authchain on Bitcoin Cash.
             </p>
           )}
@@ -522,10 +511,10 @@ export default function Home() {
           />
           {!compact && (
             <>
-              <div className={`${styles.searchHint} app-landing-only`}>
+              <div className={styles.searchHint}>
                 Paste a Token ID (Category ID) to look it up — or try an example below.
               </div>
-              <div className={`${styles.examples} app-landing-only`}>
+              <div className={styles.examples}>
                 <div className={styles.examplesLabel}>Example tokens</div>
                 <div className={styles.exampleList}>
                   {EXAMPLE_TOKENS.map(example => (

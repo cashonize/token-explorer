@@ -1,9 +1,4 @@
-allowBuilds:
-  sharp: true
-  unrs-resolver: true
 overrides:
-  # next pins postcss 8.4.31, which has open advisories; force the patched line
-  postcss: ">=8.5.23"
   # exact pins: network 4.3.0 was broken and reached consumers via a caret range
   "@electrum-cash/network": "4.4.8"
   "@electrum-cash/web-socket": "4.1.0"

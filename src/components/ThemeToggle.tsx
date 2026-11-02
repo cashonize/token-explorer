@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import styles from '@/styles/Home.module.css'
 
 type Theme = 'light' | 'dark'
@@ -20,25 +20,30 @@ function MoonIcon() {
   )
 }
 
-export function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>('light')
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => {
+// Same choice the inline script in index.html applied before first paint:
+// a stored preference, otherwise the system color scheme
+function getInitialTheme(): Theme {
+  try {
     const stored = localStorage.getItem('theme')
-    if (stored === 'light' || stored === 'dark') {
-      setTheme(stored)
-    } else {
-      setTheme(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-    }
-    setMounted(true)
-  }, [])
+    if (stored === 'light' || stored === 'dark') return stored
+  } catch {
+    // localStorage unavailable (e.g. blocked storage): fall back to the system preference
+  }
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+export function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>(getInitialTheme)
 
   const toggle = () => {
     const next: Theme = theme === 'dark' ? 'light' : 'dark'
     setTheme(next)
-    localStorage.setItem('theme', next)
     document.documentElement.dataset.theme = next
+    try {
+      localStorage.setItem('theme', next)
+    } catch {
+      // localStorage unavailable: the choice applies to this page view only
+    }
   }
 
   return (
@@ -48,7 +53,7 @@ export function ThemeToggle() {
       aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
       title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
     >
-      {mounted && (theme === 'dark' ? <SunIcon /> : <MoonIcon />)}
+      {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
     </button>
   )
 }

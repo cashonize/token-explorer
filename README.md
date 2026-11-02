@@ -20,11 +20,27 @@ Take a look at [the token info of DogeCash](https://tokenexplorer.cash/?tokenId=
 
 ## How the data is fetched
 
-On-chain token info (the genesis transaction, genesis supply of FTs, active minting UTXOs, holders and the authchain) is queried from [Chaingraph](https://chaingraph.cash/). The Chaingraph instance defaults to a [public instance](https://gql.chaingraph.pat.mn/v1/graphql) but is configurable via the `NEXT_PUBLIC_CHAINGRAPH_URL` environment variable.
+On-chain token info (the genesis transaction, genesis supply of FTs, active minting UTXOs, holders and the authchain) is queried from [Chaingraph](https://chaingraph.cash/). The Chaingraph instance defaults to a [public instance](https://gql.chaingraph.pat.mn/v1/graphql) but is configurable via the `NEXT_PUBLIC_CHAINGRAPH_URL` environment variable (read at build time; the `NEXT_PUBLIC_` name is kept from the Next.js version of the app).
 
-Because a Chaingraph instance can serve stale UTXO data (reporting already-spent UTXOs as unspent), the reserved and circulating supply are cross-verified against Electrum Cash servers, which talk to full nodes directly. Electrum is used to confirm which of Chaingraph's UTXOs are actually still unspent; if the two disagree, Electrum's view is used and the discrepancy is surfaced in the UI. Electrum verification is non-blocking: if it fails, the explorer falls back to Chaingraph data labelled as unverified.
+Because a Chaingraph instance can serve stale UTXO data (reporting already-spent UTXOs as unspent), the reserved and circulating supply can optionally be cross-verified against Electrum Cash servers, which talk to full nodes directly. This is off by default and enabled with the "verify supply via Electrum" checkbox in the footer (remembered in the browser). When enabled, Electrum is used to confirm which of Chaingraph's UTXOs are actually still unspent; if the two disagree, Electrum's view is used and the discrepancy is surfaced in the UI. Electrum verification is non-blocking: if it fails, the explorer falls back to Chaingraph data labelled as unverified.
+
+## Development
+
+The app is a static React single-page app built with [Vite](https://vite.dev/).
+
+```bash
+pnpm install
+pnpm dev          # dev server on http://localhost:5173
+pnpm build        # type check + production build to dist/
+pnpm preview      # serve the production build
+pnpm lint
+pnpm typecheck
+pnpm test         # unit tests (Vitest)
+```
+
+To use another Chaingraph instance, set the variable when building or starting the dev server, e.g. `NEXT_PUBLIC_CHAINGRAPH_URL=https://example.com/v1/graphql pnpm build`. The site is deployed on Netlify as a static build (see `netlify.toml`).
 
 ## How it was made
 
-The project was started from the [mainnet-js React-next](https://github.com/mainnet-cash/mainnet-js/tree/master/demo/react-next) example.
+The project was started from the [mainnet-js React-next](https://github.com/mainnet-cash/mainnet-js/tree/master/demo/react-next) example and later moved from Next.js to Vite, since it is a single client-side page.
 On-chain linked Bitcoin Cash Metadata Registries (BCMR) were originally resolved with [mainnet-js](https://mainnet.cash/); the explorer now resolves them itself (`src/utils/bcmr.ts`), reusing the authchain data it already queries from Chaingraph.
