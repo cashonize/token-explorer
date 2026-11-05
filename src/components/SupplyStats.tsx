@@ -149,12 +149,12 @@ const REMOVAL_LABEL: Record<SupplyRemovalRow['kind'], { label: string; tipLabel:
   burned: {
     label: 'Sent to a burn output',
     tipLabel: 'About tokens sent to a burn output',
-    tip: BURN_EXPLANATION + ' Subtracted from circulating supply.',
+    tip: BURN_EXPLANATION,
   },
   withoutBurnOutput: {
     label: 'Not in any output',
     tipLabel: 'About tokens not in any output',
-    tip: "Tokens a transaction spent but didn't pass on to any output, so they no longer exist. Some contracts remove tokens this way on purpose; it can also be a wallet error. Not visible as a burn output, so still counted in circulating supply.",
+    tip: "Tokens a transaction spent but didn't pass on to any output, so they no longer exist. Some contracts remove tokens this way on purpose; it can also be a wallet error. The explorer can't tell which.",
   },
 }
 
@@ -225,19 +225,16 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
   const hasFT = tokenInfo.genesisSupplyFT > 0n
   const showPrimarySupply = !tokenInfo.issuingUtxosError && !!metadataInfo?.tokenMetadata && hasFT
 
-  // Provable burns (OP_RETURN outputs, tokenburner.cash). They're queried regardless of
-  // spent state, so unlike reserved supply they can't be thrown off by stale UTXO data.
+  // Provable burns (OP_RETURN outputs, tokenburner.cash), only used for the "Removed from supply"
+  // breakdown; the headline figures are as before (naive circulating, then burned once holder data is in).
   const knownBurns = tokenInfo.knownBurns
-  const knownBurnedFT = knownBurns?.burnedFT ?? 0n
-  // The burn query lands after Phase 1, so circulating supply waits for it rather than flash a pre-burn figure
-  const burnsPending = !knownBurns && !tokenInfo.burnsError
   const hasKnownBurns = !!knownBurns && (knownBurns.burnedFT > 0n || knownBurns.burnedNFTs > 0)
 
-  // Resolve reserved supply (Chaingraph, or Electrum-verified) and circulating = genesis − reserved − known burns.
+  // Resolve reserved supply (Chaingraph, or Electrum-verified) and naive circulating = genesis − reserved.
   const supply = (() => {
     if (!showPrimarySupply) return null
     const withCirculating = <T extends { reservedFT: bigint }>(figures: T) =>
-      ({ ...figures, circulating: tokenInfo.genesisSupplyFT - figures.reservedFT - knownBurnedFT })
+      ({ ...figures, naiveCirculating: tokenInfo.genesisSupplyFT - figures.reservedFT })
     if (!electrumVerification) {
       if (electrumEnabled) return { state: extendedInfo ? 'fetching-electrum' : 'loading' } as const
       return withCirculating({ state: 'chaingraph' as const, reservedFT: tokenInfo.reservedSupplyFT })
@@ -251,22 +248,14 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
       exactMatch: electrumVerification.electrumReservedFT === tokenInfo.reservedSupplyFT
     })
   })()
-  const supplyFigures = supply && 'circulating' in supply ? supply : null
-  const loadingValue = (text: string) => <span style={{ color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.9rem' }}>{text}</span>
-  // Removed from supply, from the (slower, Chaingraph-only) sum of all unspent outputs: genesis
-  // minus everything still unspent. Minus the burns, the rest was removed without a burn output
-  // (spent but not passed on), which can't be attributed to an output. Less reliable than the
-  // headline figures when Chaingraph is stale. Held (user + contract) + removed + reserved = genesis.
+  const supplyFigures = supply && 'naiveCirculating' in supply ? supply : null
+  // From the (slower, Chaingraph-only) sum of all unspent outputs: burned = genesis minus everything
+  // still unspent, split below into tokens sent to a burn output and tokens no longer in any output
+  // (spent but not passed on). Less reliable than the naive figures when Chaingraph is stale.
+  // Held (user + contract) + burned + reserved = genesis.
   const removedFT = extendedInfo && hasFT ? tokenInfo.genesisSupplyFT - extendedInfo.totalSupplyFT : undefined
+  const circulatingExclBurns = extendedInfo && hasFT ? extendedInfo.totalSupplyFT - tokenInfo.reservedSupplyFT : undefined
   const removal = supplyRemovalRows(removedFT, knownBurns?.burnedFT)
-  const removedWithoutBurnFT = removal.withoutBurnOutputFT ?? 0n
-
-  // The headline circulating figure stays genesis − reserved − burns (fast and stable), so tokens
-  // no longer in any output are still in it; its tooltip says so once holder data is in.
-  // The card is hidden when it would just repeat genesis supply. While burns are pending it only
-  // shows (as "loading burns…") when there's a reserve, so it never appears and then disappears.
-  const showCirculating = !!supplyFigures &&
-    (supplyFigures.reservedFT > 0n || knownBurnedFT > 0n || !!tokenInfo.burnsError)
 
   const reservedUtxos = tokenInfo.reservedSupplyUtxos.filter(utxo => utxo.isAuthhead || utxo.fungibleTokenAmount > 0n)
   const covenantUtxos = reservedUtxos.filter(utxo => !utxo.isAuthhead && !utxo.lockingBytecode.startsWith('76a914'))
@@ -294,33 +283,37 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
         <div className="note note-warn" style={{ marginBottom: '16px' }}>
           {tokenInfo.genesisInfoError && <div>{tokenInfo.genesisInfoError} — genesis supply and NFT presence can&apos;t be shown.</div>}
           {tokenInfo.issuingUtxosError && <div>{tokenInfo.issuingUtxosError} — reserved supply can&apos;t be shown.</div>}
-          {tokenInfo.burnsError && <div>{tokenInfo.burnsError} — circulating supply doesn&apos;t subtract burned tokens.</div>}
+          {tokenInfo.burnsError && <div>{tokenInfo.burnsError} — burned supply can&apos;t be split into burn outputs and other removals.</div>}
         </div>
       )}
 
-      {/* Headline supply figures: circulating first, it's the number people come for */}
+      {/* Headline supply figures */}
       {(hasFT || (extendedInfo && extendedInfo.totalSupplyNFTs > 0)) && (
         <StatGrid>
-          {supplyFigures && showCirculating && (
-            <Stat
-              label={<>Circulating supply<InfoTip label="About circulating supply">
-                Genesis supply minus reserved supply and tokens sent to a burn output.
-                {removedWithoutBurnFT > 0n && <> Still includes {displayTokenAmount(removedWithoutBurnFT)} no longer in any output (see Removed from supply).</>}
-              </InfoTip></>}
-              value={burnsPending ? loadingValue('loading burns…') : displayTokenAmount(supplyFigures.circulating)}
-              sub={tokenInfo.burnsError ? '(burns not included)' : undefined}
-              note={!burnsPending && knownBurnedFT > 0n ? `excl. ${displayTokenAmount(knownBurnedFT)} burned` : undefined}
-            />
-          )}
-          {(supply?.state === 'loading' || supply?.state === 'fetching-electrum') && (
-            <Stat label="Circulating supply" value={loadingValue(supply.state === 'loading' ? 'loading…' : 'verifying via Electrum…')} />
-          )}
-
           {hasFT && (
             <Stat label="Genesis supply" value={displayTokenAmount(tokenInfo.genesisSupplyFT)} />
           )}
+
           {supplyFigures && supplyFigures.reservedFT > 0n && (
-            <Stat label="Reserved supply" value={displayTokenAmount(supplyFigures.reservedFT)} sub={supplyFigures.state === 'unverified' ? '(unverified)' : undefined} />
+            <>
+              <Stat label="Circulating supply (naive)" value={displayTokenAmount(supplyFigures.naiveCirculating)} />
+              <Stat label="Reserved supply" value={displayTokenAmount(supplyFigures.reservedFT)} sub={supplyFigures.state === 'unverified' ? '(unverified)' : undefined} />
+            </>
+          )}
+          {(supply?.state === 'loading' || supply?.state === 'fetching-electrum') && (
+            <Stat label="Circulating supply" value={<span style={{ color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.9rem' }}>{supply.state === 'loading' ? 'loading…' : 'verifying via Electrum…'}</span>} />
+          )}
+
+          {removedFT !== undefined && removedFT > 0n && (
+            <Stat
+              label={<>Burned<InfoTip label="About burned supply">
+                Genesis supply minus all tokens still in unspent outputs. See Removed from supply below for how much was sent to a burn output.
+              </InfoTip></>}
+              value={displayTokenAmount(removedFT)}
+            />
+          )}
+          {circulatingExclBurns !== undefined && (
+            <Stat label="Circulating (excl. burns)" value={displayTokenAmount(circulatingExclBurns)} />
           )}
 
           {extendedInfo && extendedInfo.totalSupplyNFTs > 0 && (
