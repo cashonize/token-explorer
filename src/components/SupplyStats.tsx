@@ -142,8 +142,8 @@ const BURN_EXPLANATION = 'Sent to an output that can never be spent (an OP_RETUR
 
 const REMOVAL_LABEL: Record<SupplyRemovalRow['kind'], { label: string; tipLabel: string; tip: string }> = {
   removed: {
-    label: 'Total removed',
-    tipLabel: 'About total removed from supply',
+    label: 'Total burned',
+    tipLabel: 'About total burned supply',
     tip: "Genesis supply minus all tokens still held in unspent outputs. Burn data couldn't be loaded, so this can't be split into tokens sent to a burn output and tokens no longer in any output.",
   },
   burned: {
@@ -307,7 +307,7 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
           {removedFT !== undefined && removedFT > 0n && (
             <Stat
               label={<>Burned<InfoTip label="About burned supply">
-                Genesis supply minus all tokens still in unspent outputs. See Removed from supply below for how much was sent to a burn output.
+                Genesis supply minus all tokens still in unspent outputs. Split below under Removed from supply into tokens sent to a burn output and tokens no longer in any output.
               </InfoTip></>}
               value={displayTokenAmount(removedFT)}
             />

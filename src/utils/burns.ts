@@ -41,7 +41,7 @@ export type SupplyRemovalRow = { kind: 'removed' | 'burned' | 'withoutBurnOutput
  * undivided total can be shown. Negative figures mean stale Chaingraph data: they're
  * never shown, and `inconsistent` is set instead.
  */
-export function supplyRemovalRows(removedFT: bigint | undefined, burnedFT: bigint | undefined): { rows: SupplyRemovalRow[], withoutBurnOutputFT?: bigint, inconsistent: boolean } {
+export function supplyRemovalRows(removedFT: bigint | undefined, burnedFT: bigint | undefined): { rows: SupplyRemovalRow[], inconsistent: boolean } {
   const burnedRows: SupplyRemovalRow[] = burnedFT !== undefined && burnedFT > 0n ? [{ kind: 'burned', amount: burnedFT }] : []
   if (removedFT === undefined) return { rows: burnedRows, inconsistent: false }
   if (removedFT < 0n) return { rows: burnedRows, inconsistent: true }
@@ -51,7 +51,7 @@ export function supplyRemovalRows(removedFT: bigint | undefined, burnedFT: bigin
   const withoutBurnOutputFT = removedFT - burnedFT
   if (withoutBurnOutputFT < 0n) return { rows: burnedRows, inconsistent: true }
   const rows = withoutBurnOutputFT > 0n ? [...burnedRows, { kind: 'withoutBurnOutput' as const, amount: withoutBurnOutputFT }] : burnedRows
-  return { rows, withoutBurnOutputFT, inconsistent: false }
+  return { rows, inconsistent: false }
 }
 
 export interface BurnTransaction {

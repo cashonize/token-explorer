@@ -12,7 +12,7 @@ interface OutputWithLockingBytecode {
  * Reserved outputs (`reservedOutpoints`, "txHash:vout", plus any minting/mutable NFT
  * output) are left out of the split, so for Chaingraph data:
  *   userSupplyFT + contractSupplyFT = unspent − reserved
- *                                   = circulating (genesis − reserved − provable burns) − lost in transactions
+ *                                   = circulating (excl. burns)
  * Address counts still include addresses that only hold reserved outputs.
  */
 export function countUniqueHolders(

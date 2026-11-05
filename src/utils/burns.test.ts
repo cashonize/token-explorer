@@ -143,7 +143,6 @@ describe('supplyRemovalRows', () => {
         { kind: 'burned', amount: 535n },
         { kind: 'withoutBurnOutput', amount: 167_147_009n },
       ],
-      withoutBurnOutputFT: 167_147_009n,
       inconsistent: false,
     })
   })
@@ -151,13 +150,11 @@ describe('supplyRemovalRows', () => {
   it('shows a single "not in any output" row when nothing was burned (Furu)', () => {
     const result = supplyRemovalRows(747_867_544n, 0n)
     expect(result.rows).toEqual([{ kind: 'withoutBurnOutput', amount: 747_867_544n }])
-    expect(result.withoutBurnOutputFT).toBe(747_867_544n)
   })
 
   it('shows a single "sent to a burn output" row when every removal is a burn', () => {
     const result = supplyRemovalRows(1000n, 1000n)
     expect(result.rows).toEqual([{ kind: 'burned', amount: 1000n }])
-    expect(result.withoutBurnOutputFT).toBe(0n)
   })
 
   it('shows nothing when nothing was removed', () => {
