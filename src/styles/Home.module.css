@@ -299,13 +299,6 @@
   word-break: break-word;
 }
 
-.statSecondary {
-  background: transparent;
-}
-.statSecondary .statValue {
-  font-weight: 600;
-}
-
 .statNote {
   margin-top: 6px;
   font-size: 0.78rem;
@@ -450,14 +443,6 @@
 .checkUnknown { background: var(--surface-muted); color: var(--text-muted); }
 
 /* Indented child row, e.g. the parts of a total */
-.rowIndent { border-top-style: dashed; }
-.rowIndent .rowLabel { padding-left: 18px; }
-@media (max-width: 600px) {
-  /* label and value stack, so indent the whole row */
-  .rowIndent { padding-left: 18px; }
-  .rowIndent .rowLabel { padding-left: 0; }
-}
-
 /* ---------- Info tooltip (ui.tsx InfoTip) ---------- */
 .infoTip {
   position: relative;

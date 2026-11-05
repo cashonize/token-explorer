@@ -141,27 +141,24 @@ const BURN_METHOD_LABEL: Record<BurnEntry['method'], string> = {
 const BURN_EXPLANATION = 'Sent to an output that can never be spent (an OP_RETURN data output or the tokenburner.cash contract), so permanently out of supply. Burning is routine for many tokens, e.g. stablecoins burn tokens when a loan is repaid or tokens are redeemed.'
 
 const REMOVAL_LABEL: Record<SupplyRemovalRow['kind'], { label: string; tipLabel: string; tip: string }> = {
-  total: {
-    label: 'Total',
+  removed: {
+    label: 'Total removed',
     tipLabel: 'About total removed from supply',
-    tip: 'Genesis supply minus all tokens still held in unspent outputs.',
+    tip: "Genesis supply minus all tokens still held in unspent outputs. Burn data couldn't be loaded, so this can't be split into tokens sent to a burn output and tokens no longer in any output.",
   },
   burned: {
-    label: 'Burned',
-    tipLabel: 'About burned tokens',
-    tip: BURN_EXPLANATION,
+    label: 'Sent to a burn output',
+    tipLabel: 'About tokens sent to a burn output',
+    tip: BURN_EXPLANATION + ' Subtracted from circulating supply.',
   },
   withoutBurnOutput: {
-    label: 'Without a burn output',
-    tipLabel: 'About tokens removed without a burn output',
-    tip: "Tokens a transaction spent but didn't pass on to any output, so they no longer exist. Some contracts remove tokens this way on purpose; it can also be a wallet error. The explorer can't tell which.",
+    label: 'Not in any output',
+    tipLabel: 'About tokens not in any output',
+    tip: "Tokens a transaction spent but didn't pass on to any output, so they no longer exist. Some contracts remove tokens this way on purpose; it can also be a wallet error. Not visible as a burn output, so still counted in circulating supply.",
   },
 }
 
 const shortHash = (hash: string) => `${hash.slice(0, 8)}…${hash.slice(-8)}`
-
-// id of the "Removed from supply" heading, linked from the circulating sub-line
-const REMOVED_FROM_SUPPLY_ID = 'removed-from-supply'
 
 function BurnTransactionList({ burns, displayTokenAmount }: { burns: BurnEntry[]; displayTokenAmount: (amount: bigint) => string }) {
   const [shown, setShown] = useState(INITIAL_BURN_TXS)
@@ -265,20 +262,11 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
   const removedWithoutBurnFT = removal.withoutBurnOutputFT ?? 0n
 
   // The headline circulating figure stays genesis − reserved − burns (fast and stable), so tokens
-  // removed without a burn output are still in it; a sub-line says so once holder data is in.
+  // no longer in any output are still in it; its tooltip says so once holder data is in.
   // The card is hidden when it would just repeat genesis supply. While burns are pending it only
-  // shows (as "loading burns…") when there's a reserve, and holder data only ever adds the
-  // sub-line, so the card never appears and then disappears.
+  // shows (as "loading burns…") when there's a reserve, so it never appears and then disappears.
   const showCirculating = !!supplyFigures &&
-    (supplyFigures.reservedFT > 0n || knownBurnedFT > 0n || !!tokenInfo.burnsError || removedWithoutBurnFT > 0n)
-  const heldFT = extendedInfo ? extendedInfo.userSupplyFT + extendedInfo.contractSupplyFT : undefined
-  const circulatingNote = removedWithoutBurnFT > 0n ? (
-    <>
-      Includes {displayTokenAmount(removedWithoutBurnFT)} no longer held in any output
-      {heldFT !== undefined && <>; {displayTokenAmount(heldFT)} {heldFT === 1n ? 'is' : 'are'} held</>}
-      {' '}(see <a href={`#${REMOVED_FROM_SUPPLY_ID}`}>Removed from supply</a>).
-    </>
-  ) : undefined
+    (supplyFigures.reservedFT > 0n || knownBurnedFT > 0n || !!tokenInfo.burnsError)
 
   const reservedUtxos = tokenInfo.reservedSupplyUtxos.filter(utxo => utxo.isAuthhead || utxo.fungibleTokenAmount > 0n)
   const covenantUtxos = reservedUtxos.filter(utxo => !utxo.isAuthhead && !utxo.lockingBytecode.startsWith('76a914'))
@@ -316,11 +304,12 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
           {supplyFigures && showCirculating && (
             <Stat
               label={<>Circulating supply<InfoTip label="About circulating supply">
-                Genesis supply minus reserved supply and burned tokens.
+                Genesis supply minus reserved supply and tokens sent to a burn output.
+                {removedWithoutBurnFT > 0n && <> Still includes {displayTokenAmount(removedWithoutBurnFT)} no longer in any output (see Removed from supply).</>}
               </InfoTip></>}
               value={burnsPending ? loadingValue('loading burns…') : displayTokenAmount(supplyFigures.circulating)}
               sub={tokenInfo.burnsError ? '(burns not included)' : undefined}
-              note={burnsPending ? undefined : circulatingNote}
+              note={!burnsPending && knownBurnedFT > 0n ? `excl. ${displayTokenAmount(knownBurnedFT)} burned` : undefined}
             />
           )}
           {(supply?.state === 'loading' || supply?.state === 'fetching-electrum') && (
@@ -332,14 +321,6 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
           )}
           {supplyFigures && supplyFigures.reservedFT > 0n && (
             <Stat label="Reserved supply" value={displayTokenAmount(supplyFigures.reservedFT)} sub={supplyFigures.state === 'unverified' ? '(unverified)' : undefined} />
-          )}
-
-          {knownBurns && knownBurns.burnedFT > 0n && (
-            <Stat
-              secondary
-              label={<>Burned<InfoTip label="About burned tokens">{BURN_EXPLANATION}</InfoTip></>}
-              value={displayTokenAmount(knownBurns.burnedFT)}
-            />
           )}
 
           {extendedInfo && extendedInfo.totalSupplyNFTs > 0 && (
@@ -458,20 +439,20 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
               burned NFTs, then the burn transactions behind both */}
           {(removal.rows.length > 0 || removal.inconsistent || hasKnownBurns) && (
             <>
-              <div id={REMOVED_FROM_SUPPLY_ID} className={styles.sectionTitle} style={{ marginTop: '24px', scrollMarginTop: '16px' }}>Removed from supply</div>
+              <div className={styles.sectionTitle} style={{ marginTop: '24px' }}>Removed from supply</div>
               {(removal.rows.length > 0 || (knownBurns && knownBurns.burnedNFTs > 0)) && (
                 <Rows>
                   {removal.rows.map(row => {
                     const { label, tipLabel, tip } = REMOVAL_LABEL[row.kind]
                     return (
-                      <Row key={row.kind} indent={'indent' in row && row.indent} label={<>{label}<InfoTip label={tipLabel}>{tip}</InfoTip></>}>
+                      <Row key={row.kind} label={<>{label}<InfoTip label={tipLabel}>{tip}</InfoTip></>}>
                         {displayTokenAmount(row.amount)}
                       </Row>
                     )
                   })}
                   {knownBurns && knownBurns.burnedNFTs > 0 && (
-                    <Row label={<>NFTs burned<InfoTip label="About burned NFTs">
-                      NFTs sent to a burn output. In lending protocols this usually means a loan was closed.
+                    <Row label={<>NFTs sent to a burn output<InfoTip label="About burned NFTs">
+                      In lending protocols this usually means a loan was closed.
                     </InfoTip></>}>{knownBurns.burnedNFTs.toLocaleString("en-GB")}</Row>
                   )}
                 </Rows>

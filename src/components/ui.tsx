@@ -15,9 +15,9 @@ export function SectionTitle({ children }: { children: ReactNode }) {
   return <div className={styles.sectionTitle}>{children}</div>
 }
 
-export function Stat({ label, value, sub, note, secondary = false }: { label: ReactNode; value: ReactNode; sub?: ReactNode; note?: ReactNode; secondary?: boolean }) {
+export function Stat({ label, value, sub, note }: { label: ReactNode; value: ReactNode; sub?: ReactNode; note?: ReactNode }) {
   return (
-    <div className={`${styles.stat}${secondary ? ` ${styles.statSecondary}` : ''}`}>
+    <div className={styles.stat}>
       <div className={styles.statLabel}>{label}</div>
       <div className={styles.statValue}>
         {value}
@@ -36,9 +36,9 @@ export function Rows({ children }: { children: ReactNode }) {
   return <div className={styles.rows}>{children}</div>
 }
 
-export function Row({ label, children, indent = false }: { label: ReactNode; children: ReactNode; indent?: boolean }) {
+export function Row({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
-    <div className={`${styles.row}${indent ? ` ${styles.rowIndent}` : ''}`}>
+    <div className={styles.row}>
       <div className={styles.rowLabel}>{label}</div>
       <div className={styles.rowValue}>{children}</div>
     </div>

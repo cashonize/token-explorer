@@ -137,27 +137,26 @@ describe('groupBurnsByTransaction', () => {
 })
 
 describe('supplyRemovalRows', () => {
-  it('shows the total with both parts indented when both are > 0 (DogeCash)', () => {
+  it('shows both parts, without a total, when both are > 0 (DogeCash)', () => {
     expect(supplyRemovalRows(167_147_544n, 535n)).toEqual({
       rows: [
-        { kind: 'total', amount: 167_147_544n },
-        { kind: 'burned', amount: 535n, indent: true },
-        { kind: 'withoutBurnOutput', amount: 167_147_009n, indent: true },
+        { kind: 'burned', amount: 535n },
+        { kind: 'withoutBurnOutput', amount: 167_147_009n },
       ],
       withoutBurnOutputFT: 167_147_009n,
       inconsistent: false,
     })
   })
 
-  it('shows a single "removed without a burn output" row when nothing was burned (Furu)', () => {
+  it('shows a single "not in any output" row when nothing was burned (Furu)', () => {
     const result = supplyRemovalRows(747_867_544n, 0n)
-    expect(result.rows).toEqual([{ kind: 'withoutBurnOutput', amount: 747_867_544n, indent: false }])
+    expect(result.rows).toEqual([{ kind: 'withoutBurnOutput', amount: 747_867_544n }])
     expect(result.withoutBurnOutputFT).toBe(747_867_544n)
   })
 
   it('shows a single "sent to a burn output" row when every removal is a burn', () => {
     const result = supplyRemovalRows(1000n, 1000n)
-    expect(result.rows).toEqual([{ kind: 'burned', amount: 1000n, indent: false }])
+    expect(result.rows).toEqual([{ kind: 'burned', amount: 1000n }])
     expect(result.withoutBurnOutputFT).toBe(0n)
   })
 
@@ -166,15 +165,15 @@ describe('supplyRemovalRows', () => {
   })
 
   it('shows only the burns before holder data has loaded', () => {
-    expect(supplyRemovalRows(undefined, 42n)).toEqual({ rows: [{ kind: 'burned', amount: 42n, indent: false }], inconsistent: false })
+    expect(supplyRemovalRows(undefined, 42n)).toEqual({ rows: [{ kind: 'burned', amount: 42n }], inconsistent: false })
   })
 
   it('shows only the total when the burn query failed', () => {
-    expect(supplyRemovalRows(500n, undefined)).toEqual({ rows: [{ kind: 'total', amount: 500n }], inconsistent: false })
+    expect(supplyRemovalRows(500n, undefined)).toEqual({ rows: [{ kind: 'removed', amount: 500n }], inconsistent: false })
   })
 
   it('never shows a negative figure: stale data (unspent > genesis, or > genesis − burns) is flagged', () => {
-    expect(supplyRemovalRows(-5n, 10n)).toEqual({ rows: [{ kind: 'burned', amount: 10n, indent: false }], inconsistent: true })
-    expect(supplyRemovalRows(5n, 10n)).toEqual({ rows: [{ kind: 'burned', amount: 10n, indent: false }], inconsistent: true })
+    expect(supplyRemovalRows(-5n, 10n)).toEqual({ rows: [{ kind: 'burned', amount: 10n }], inconsistent: true })
+    expect(supplyRemovalRows(5n, 10n)).toEqual({ rows: [{ kind: 'burned', amount: 10n }], inconsistent: true })
   })
 })
