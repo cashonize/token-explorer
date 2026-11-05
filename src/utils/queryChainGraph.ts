@@ -39,10 +39,45 @@ export async function queryGenesisInfo(tokenId:string){
  * keeps transactions that were dropped from a mempool, so without this check their outputs would count.
  * Doing that check server-side (`node_validations` OR a block with `accepted_by`, on the output's
  * transaction and on its spenders) made these queries time out on large categories.
- * Gaps vs. the server-side filter: an output whose only spender was dropped without a conflicting
- * transaction is treated as spent (a double-spent output still has its valid spender), and a
- * transaction mined only in an orphaned block counts as valid.
+ * Gaps vs. the server-side filter, all rare and visible as stale/missing UTXOs with Electrum verification on:
+ * - an output whose only spender was dropped without a conflicting transaction is treated as spent
+ *   (a double-spent output still has its valid spender);
+ * - likewise when the only spender is in an orphaned block and no mempool (a reorg normally puts it back);
+ * - a transaction mined only in an orphaned block counts as valid.
  */
+/** Rows per page of the paginated output queries */
+export const OUTPUT_PAGE_SIZE = 5000
+
+export interface OutputPage<T> {
+  output: T[]
+  /** rows the server returned, before the client-side validity filter */
+  pageSize: number
+}
+
+/**
+ * Fetch the pages after `firstPage` until one comes back short. Decides on the raw `pageSize`,
+ * not the filtered row count: a full page with a few invalid rows must not end pagination.
+ * Returns 'stale' as soon as `isCurrent()` is false, 'error' if a page fails.
+ */
+export async function fetchRemainingPages<T>(
+  firstPage: OutputPage<T>,
+  fetchPage: (offset: number) => Promise<OutputPage<T> | undefined>,
+  isCurrent: () => boolean = () => true,
+): Promise<T[] | 'stale' | 'error'> {
+  let outputs = firstPage.output
+  let lastPageSize = firstPage.pageSize
+  let offset = 0
+  while (lastPageSize === OUTPUT_PAGE_SIZE) {
+    offset += OUTPUT_PAGE_SIZE
+    const page = await fetchPage(offset)
+    if (!isCurrent()) return 'stale'
+    if (!page) return 'error'
+    outputs = outputs.concat(page.output)
+    lastPageSize = page.pageSize
+  }
+  return outputs
+}
+
 export function isValidOutput(output: { transaction?: { node_validations: unknown[], block_inclusions: unknown[] } | null }): boolean {
   const tx = output.transaction
   return !!tx && (tx.node_validations.length > 0 || tx.block_inclusions.length > 0)
@@ -51,11 +86,12 @@ export function isValidOutput(output: { transaction?: { node_validations: unknow
 export async function queryAllTokenHolders(tokenId:string, offset:number = 0){
   const queryReqTotalSupply = graphql(`query TotalSupplyFT (
     $offset: Int,
+    $limit: Int,
     $tokenId: bytea
   ) {
       output(
         offset: $offset
-        limit: 5000
+        limit: $limit
         where: {
           token_category: { _eq: $tokenId }
           locking_bytecode_pattern: { _neq: "6a" }
@@ -73,7 +109,7 @@ export async function queryAllTokenHolders(tokenId:string, offset:number = 0){
         }
       }
     }`);
-  const variables = { tokenId: `\\x${tokenId}`, offset }
+  const variables = { tokenId: `\\x${tokenId}`, offset, limit: OUTPUT_PAGE_SIZE }
   const data = (await chaingraphClient.query(queryReqTotalSupply, variables)).data
   if (!data) return data
   // pageSize counts the rows before the validity filter, so pagination knows whether another page follows

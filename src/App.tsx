@@ -1,7 +1,7 @@
 import styles from '@/styles/Home.module.css'
 import { hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth'
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
-import { queryGenesisInfo, queryIssuingUtxos, queryAuthchain, queryAllTokenHolders, queryGenesisCategories, queryKnownBurns, parseAuthchainMigrations, type AuthchainQueryResult } from '@/utils/queryChainGraph'
+import { queryGenesisInfo, queryIssuingUtxos, queryAuthchain, queryAllTokenHolders, fetchRemainingPages, queryGenesisCategories, queryKnownBurns, parseAuthchainMigrations, type AuthchainQueryResult } from '@/utils/queryChainGraph'
 import { aggregateBurns, isKnownBurnLockingBytecode } from '@/utils/burns'
 import { countUniqueHolders, calculateTotalSupplyFT } from '@/utils/calculations'
 import { checkOtrVerified } from '@/utils/otrRegistry'
@@ -452,28 +452,17 @@ export default function App() {
         return
       }
 
-      // Paginate queryAllTokenHolders (returns max 5000 per page)
-      let allTokenOutputs = respJsonAllTokenHolders.output
-      let lastBatchSize = respJsonAllTokenHolders.pageSize
-      let indexOffset = 0
-
-      while (lastBatchSize === 5000) {
-        indexOffset += 1
-        console.time(`queryAllTokenHolders page ${indexOffset + 1}`)
-        const nextPage = await queryAllTokenHolders(tokenId, 5000 * indexOffset)
-        console.timeEnd(`queryAllTokenHolders page ${indexOffset + 1}`)
-        if (!isCurrent()) return
-        if (!nextPage) {
-          setExtendedTokenInfoError("Failed to load holder & supply data (pagination error)")
-          return
-        }
-        allTokenOutputs = allTokenOutputs.concat(nextPage.output)
-        lastBatchSize = nextPage.pageSize
+      // Paginate queryAllTokenHolders (OUTPUT_PAGE_SIZE rows per page)
+      const fetchedOutputs = await fetchRemainingPages(respJsonAllTokenHolders, offset => queryAllTokenHolders(tokenId, offset), isCurrent)
+      if (fetchedOutputs === 'stale') return
+      if (fetchedOutputs === 'error') {
+        setExtendedTokenInfoError("Failed to load holder & supply data (pagination error)")
+        return
       }
       // The query only drops bare OP_RETURN outputs; OP_RETURNs with data pushes and unswept
       // burner-contract outputs are burns too (counted in knownBurns), not holdings. Leaving
       // them out also keeps the burner address and unspendable outputs out of Electrum's check.
-      allTokenOutputs = allTokenOutputs.filter(o => !isKnownBurnLockingBytecode(o.locking_bytecode.slice(2)))
+      const allTokenOutputs = fetchedOutputs.filter(o => !isKnownBurnLockingBytecode(o.locking_bytecode.slice(2)))
 
       // Calculate totalSupplyNFTs
       const totalSupplyNFTs = allTokenOutputs.filter(o => o.nonfungible_token_capability !== null).length
