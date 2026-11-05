@@ -454,7 +454,7 @@ export default function App() {
 
       // Paginate queryAllTokenHolders (returns max 5000 per page)
       let allTokenOutputs = respJsonAllTokenHolders.output
-      let lastBatchSize = allTokenOutputs.length
+      let lastBatchSize = respJsonAllTokenHolders.pageSize
       let indexOffset = 0
 
       while (lastBatchSize === 5000) {
@@ -468,7 +468,7 @@ export default function App() {
           return
         }
         allTokenOutputs = allTokenOutputs.concat(nextPage.output)
-        lastBatchSize = nextPage.output.length
+        lastBatchSize = nextPage.pageSize
       }
       // The query only drops bare OP_RETURN outputs; OP_RETURNs with data pushes and unswept
       // burner-contract outputs are burns too (counted in knownBurns), not holdings. Leaving

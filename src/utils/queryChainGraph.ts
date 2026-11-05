@@ -33,6 +33,21 @@ export async function queryGenesisInfo(tokenId:string){
   return (await chaingraphClient.query(queryReqGenesisSupply, variables)).data
 }
 
+/**
+ * Unspent-output queries (holders, issuing UTXOs) filter server-side on "no spender at all" and check
+ * validity client-side: the output's transaction must be in a mempool now or in a block. Chaingraph
+ * keeps transactions that were dropped from a mempool, so without this check their outputs would count.
+ * Doing that check server-side (`node_validations` OR a block with `accepted_by`, on the output's
+ * transaction and on its spenders) made these queries time out on large categories.
+ * Gaps vs. the server-side filter: an output whose only spender was dropped without a conflicting
+ * transaction is treated as spent (a double-spent output still has its valid spender), and a
+ * transaction mined only in an orphaned block counts as valid.
+ */
+export function isValidOutput(output: { transaction?: { node_validations: unknown[], block_inclusions: unknown[] } | null }): boolean {
+  const tx = output.transaction
+  return !!tx && (tx.node_validations.length > 0 || tx.block_inclusions.length > 0)
+}
+
 export async function queryAllTokenHolders(tokenId:string, offset:number = 0){
   const queryReqTotalSupply = graphql(`query TotalSupplyFT (
     $offset: Int,
@@ -44,17 +59,7 @@ export async function queryAllTokenHolders(tokenId:string, offset:number = 0){
         where: {
           token_category: { _eq: $tokenId }
           locking_bytecode_pattern: { _neq: "6a" }
-          transaction: { _or: [
-            { node_validations: {} },
-            { block_inclusions: { block: { accepted_by: {} } } }
-            ]
-          }
-          _not: { spent_by: { 
-            transaction: { _or: [
-              { node_validations: {} },
-              { block_inclusions: { block: { accepted_by: {} } } }
-            ] }
-          } }
+          _not: { spent_by: {} }
         }
       ) {
         transaction_hash
@@ -62,10 +67,17 @@ export async function queryAllTokenHolders(tokenId:string, offset:number = 0){
         locking_bytecode
         fungible_token_amount
         nonfungible_token_capability
+        transaction {
+          node_validations(limit: 1) { validated_at }
+          block_inclusions(limit: 1) { block { timestamp } }
+        }
       }
     }`);
   const variables = { tokenId: `\\x${tokenId}`, offset }
-  return (await chaingraphClient.query(queryReqTotalSupply, variables)).data
+  const data = (await chaingraphClient.query(queryReqTotalSupply, variables)).data
+  if (!data) return data
+  // pageSize counts the rows before the validity filter, so pagination knows whether another page follows
+  return { output: data.output.filter(isValidOutput), pageSize: data.output.length }
 }
 
 export async function queryIssuingUtxos(tokenId:string){
@@ -77,16 +89,7 @@ export async function queryIssuingUtxos(tokenId:string){
           token_category: { _eq: $tokenId }
           nonfungible_token_capability: { _in: ["minting", "mutable"] }
           locking_bytecode_pattern: { _neq: "6a" }
-          transaction: { _or: [
-            { node_validations: {} },
-            { block_inclusions: { block: { accepted_by: {} } } }
-          ] }
-          _not: { spent_by: { 
-            transaction: { _or: [
-              { node_validations: {} },
-              { block_inclusions: { block: { accepted_by: {} } } }
-            ] }
-          } }
+          _not: { spent_by: {} }
         }
       ) {
         transaction_hash
@@ -94,10 +97,16 @@ export async function queryIssuingUtxos(tokenId:string){
         locking_bytecode
         fungible_token_amount
         nonfungible_token_capability
+        transaction {
+          node_validations(limit: 1) { validated_at }
+          block_inclusions(limit: 1) { block { timestamp } }
+        }
       }
     }`);
   const variables = { tokenId: `\\x${tokenId}` }
-  return (await chaingraphClient.query(queryReqIssuingUtxos, variables)).data
+  const data = (await chaingraphClient.query(queryReqIssuingUtxos, variables)).data
+  if (!data) return data
+  return { output: data.output.filter(isValidOutput) }
 }
 
 
