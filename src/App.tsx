@@ -1,12 +1,13 @@
 import styles from '@/styles/Home.module.css'
 import { hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth'
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
-import { queryGenesisInfo, queryIssuingUtxos, queryAuthchain, queryAllTokenHolders, queryGenesisCategories, parseAuthchainMigrations, type AuthchainQueryResult } from '@/utils/queryChainGraph'
+import { queryGenesisInfo, queryIssuingUtxos, queryAuthchain, queryAllTokenHolders, queryGenesisCategories, queryKnownBurns, parseAuthchainMigrations, type AuthchainQueryResult } from '@/utils/queryChainGraph'
+import { aggregateBurns, isKnownBurnLockingBytecode } from '@/utils/burns'
 import { countUniqueHolders, calculateTotalSupplyFT } from '@/utils/calculations'
 import { checkOtrVerified } from '@/utils/otrRegistry'
 import { sanitizeTokenId, ipfsToGatewayUrl } from '@/utils/utils'
 import { isBcmrOutput, resolveRegistry, selectLatestPublication, type RegistryResolution } from '@/utils/bcmr'
-import type { TokenInfo, ExtendedTokenInfo, MetadataInfo, ReservedSupplyUtxo, ElectrumVerification } from '@/interfaces'
+import type { TokenInfo, ExtendedTokenInfo, MetadataInfo, ReservedSupplyUtxo, ElectrumVerification, BurnEntry } from '@/interfaces'
 import { EXAMPLE_TOKENS } from '@/constants'
 import { verifySupplyViaElectrum } from '@/utils/queryElectrum'
 import { TokenSearch, MetadataDisplay, SupplyStats, AuthchainInfo, ThemeToggle } from '@/components'
@@ -204,6 +205,18 @@ export default function App() {
     metadataReadyRef.current?.resolve()
   }
 
+  async function applyKnownBurns(burnsPromise: Promise<BurnEntry[]>, isCurrent: () => boolean) {
+    let burns: Pick<TokenInfo, 'knownBurns' | 'burnsError'>
+    try {
+      burns = { knownBurns: aggregateBurns(await burnsPromise) }
+    } catch (error) {
+      console.error("Error fetching known burns from Chaingraph:", error)
+      burns = { burnsError: "Failed to load burned tokens from Chaingraph" }
+    }
+    if (!isCurrent()) return
+    setTokenInfo(prev => prev && { ...prev, ...burns })
+  }
+
   async function lookUpTokenData(
     tokenId: string,
     authchainPromise: Promise<AuthchainQueryResult>,
@@ -215,6 +228,11 @@ export default function App() {
     // Phase 2 awaits this inside its try; the no-op handler only covers an early return in
     // Phase 1 (error or superseded search), which would otherwise leave a rejection unhandled
     holderDataPromise.catch(() => {})
+    // Known burns are merged into tokenInfo once Phase 1 has set it (applyKnownBurns), so a
+    // slow burn query (seconds for tokens with thousands of OP_RETURN burns) doesn't hold up
+    // Phase 1. Same no-op handler for an early return.
+    const burnsPromise = withTimeout(queryKnownBurns(tokenId), 'queryKnownBurns')
+    burnsPromise.catch(() => {})
     let network: 'mainnet' | 'chipnet' = 'mainnet'
     let authHead = ''
     let authHeadVout = 0
@@ -276,8 +294,9 @@ export default function App() {
       }
 
       // Parse reserved supply UTXOs (minting + mutable NFT UTXOs) — only if the query succeeded
+      // A minting/mutable NFT on an OP_RETURN or the burner contract is burned, not reserved
       const reservedSupplyUtxos: ReservedSupplyUtxo[] = respJsonIssuingUtxos
-        ? respJsonIssuingUtxos.output.map(o => ({
+        ? respJsonIssuingUtxos.output.filter(o => !isKnownBurnLockingBytecode(o.locking_bytecode.slice(2))).map(o => ({
             txHash: o.transaction_hash.slice(2),
             vout: Number(o.output_index),
             lockingBytecode: o.locking_bytecode.slice(2),
@@ -371,7 +390,7 @@ export default function App() {
         // Mark the existing entry as authhead
         const existing = reservedSupplyUtxos.find(utxo => utxo.txHash === authHead && utxo.vout === authHeadVout)
         if (existing) existing.isAuthhead = true
-      } else if (authheadReservedFT > 0n && authHeadLockingBytecode) {
+      } else if (authheadReservedFT > 0n && authHeadLockingBytecode && !isKnownBurnLockingBytecode(authHeadLockingBytecode.slice(2))) {
         reservedSupplyUtxos.push({
           txHash: authHead,
           vout: authHeadVout,
@@ -382,7 +401,8 @@ export default function App() {
         })
       }
 
-      const reservedSupplyFT = covenantReservedFT + (authHeadAlreadyIncluded ? 0n : authheadReservedFT)
+      const authheadAdded = !authHeadAlreadyIncluded && reservedSupplyUtxos.some(u => u.isAuthhead)
+      const reservedSupplyFT = covenantReservedFT + (authheadAdded ? authheadReservedFT : 0n)
 
       setTokenInfo({
         validTxId,
@@ -408,6 +428,8 @@ export default function App() {
         issuingUtxosError
       })
       setIsLoadingTokenInfo(false)
+      // Fire-and-forget: applyKnownBurns catches the query error and reports it through state
+      void applyKnownBurns(burnsPromise, isCurrent)
     } catch (error) {
       console.error("Error in initial data load:", error)
       if (!isCurrent()) return
@@ -445,6 +467,10 @@ export default function App() {
         allTokenOutputs = allTokenOutputs.concat(nextPage.output)
         lastBatchSize = nextPage.output.length
       }
+      // The query only drops bare OP_RETURN outputs; OP_RETURNs with data pushes and unswept
+      // burner-contract outputs are burns too (counted in knownBurns), not holdings. Leaving
+      // them out also keeps the burner address and unspendable outputs out of Electrum's check.
+      allTokenOutputs = allTokenOutputs.filter(o => !isKnownBurnLockingBytecode(o.locking_bytecode.slice(2)))
 
       // Calculate totalSupplyNFTs
       const totalSupplyNFTs = allTokenOutputs.filter(o => o.nonfungible_token_capability !== null).length

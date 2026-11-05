@@ -23,6 +23,27 @@ export interface ReservedSupplyUtxo {
   isAuthhead?: boolean
 }
 
+/** 'op_return': a token output with an OP_RETURN locking bytecode (unspendable);
+ * 'tokenburner': an output sent to the tokenburner.cash burner contract */
+export type BurnMethod = 'op_return' | 'tokenburner'
+
+export interface BurnEntry {
+  txHash: string
+  vout: number
+  method: BurnMethod
+  fungibleTokenAmount: bigint
+  nftCapability: 'none' | 'mutable' | 'minting' | null
+  /** block timestamp, undefined while unconfirmed */
+  timestamp?: number
+}
+
+export interface KnownBurns {
+  burnedFT: bigint
+  burnedNFTs: number
+  /** latest first (unconfirmed before confirmed) */
+  burns: BurnEntry[]
+}
+
 export interface TokenInfo {
   genesisSupplyFT: bigint
   hasGenesisNFTs: boolean
@@ -45,6 +66,10 @@ export interface TokenInfo {
   tokenCategoriesInTx?: string[]
   genesisInfoError?: string
   issuingUtxosError?: string
+  /** provable burns (OP_RETURN outputs and the tokenburner.cash contract), merged in after Phase 1;
+   *  undefined while loading or when the query failed (then burnsError is set) */
+  knownBurns?: KnownBurns
+  burnsError?: string
 }
 
 export interface ExtendedTokenInfo {

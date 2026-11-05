@@ -1,7 +1,14 @@
-import type { TokenInfo, ExtendedTokenInfo, MetadataInfo, NftCategory, ElectrumVerification, ReservedSupplyUtxo } from '@/interfaces'
+import type { TokenInfo, ExtendedTokenInfo, MetadataInfo, NftCategory, ElectrumVerification, ReservedSupplyUtxo, KnownBurns, BurnEntry } from '@/interfaces'
 import { lockingBytecodeToCashAddress, hexToBin } from '@bitauth/libauth'
 import styles from '@/styles/Home.module.css'
-import { Badge, SectionTitle, Stat, StatGrid, Row, Rows } from './ui'
+import { BLOCK_EXPLORER_URL } from '@/constants'
+import { formatTimestamp } from '@/utils/utils'
+import { Badge, HashLink, SectionTitle, Stat, StatGrid, Row, Rows } from './ui'
+
+// Burn entries listed in the disclosure (latest first); the rest are summarised as "and N more"
+const MAX_LISTED_BURNS = 50
+
+const pluralNfts = (count: number) => `${count.toLocaleString("en-GB")} NFT${count === 1 ? '' : 's'}`
 
 interface SupplyStatsProps {
   tokenInfo: TokenInfo
@@ -125,6 +132,50 @@ function UtxoEntry({ utxo, network, displayTokenAmount }: { utxo: ReservedSupply
   )
 }
 
+const BURN_METHOD_LABEL: Record<BurnEntry['method'], string> = {
+  op_return: 'OP_RETURN',
+  tokenburner: 'tokenburner.cash',
+}
+
+function BurnList({ knownBurns, displayTokenAmount }: { knownBurns: KnownBurns; displayTokenAmount: (amount: bigint) => string }) {
+  const { burns } = knownBurns
+  const listed = burns.slice(0, MAX_LISTED_BURNS)
+  const methodCounts = (['op_return', 'tokenburner'] as const)
+    .map(method => ({ method, count: burns.filter(burn => burn.method === method).length }))
+    .filter(({ count }) => count > 0)
+    .map(({ method, count }) => `${count.toLocaleString("en-GB")} ${BURN_METHOD_LABEL[method]}`)
+  return (
+    <details className="disclosure">
+      <summary>Burned in {burns.length.toLocaleString("en-GB")} output{burns.length === 1 ? '' : 's'} ({methodCounts.join(', ')})</summary>
+      <div className="disclosure-body">
+        <div style={{ marginTop: '10px' }}>
+          {listed.map(burn => (
+            <div key={`${burn.txHash}:${burn.vout}`} className={styles.entry}>
+              <div className={styles.entryHead}>
+                <Badge tone={burn.method === 'tokenburner' ? 'purple' : 'neutral'}>{BURN_METHOD_LABEL[burn.method]}</Badge>
+                {burn.nftCapability && <Badge tone="info">{burn.nftCapability === 'none' ? 'NFT' : `${burn.nftCapability} NFT`}</Badge>}
+              </div>
+              <div style={{ wordBreak: 'break-all' }}>
+                <span style={{ color: 'var(--text-muted)' }}>outpoint:</span>{' '}
+                <HashLink hash={`${burn.txHash}:${burn.vout}`} href={BLOCK_EXPLORER_URL + burn.txHash} />
+              </div>
+              {burn.fungibleTokenAmount > 0n && (
+                <div><span style={{ color: 'var(--text-muted)' }}>FT amount:</span> {displayTokenAmount(burn.fungibleTokenAmount)}</div>
+              )}
+              <div style={{ color: 'var(--text-muted)' }}>{burn.timestamp != null ? formatTimestamp(burn.timestamp) : 'unconfirmed'}</div>
+            </div>
+          ))}
+          {burns.length > listed.length && (
+            <div style={{ color: 'var(--text-muted)', marginTop: '10px' }}>
+              and {(burns.length - listed.length).toLocaleString("en-GB")} more
+            </div>
+          )}
+        </div>
+      </div>
+    </details>
+  )
+}
+
 export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metadataInfo, electrumVerification, electrumEnabled }: SupplyStatsProps) {
   const decimals = metadataInfo?.tokenMetadata?.token?.decimals ?? 0
   const symbol = metadataInfo?.tokenMetadata?.token?.symbol ?? ''
@@ -147,41 +198,44 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
   const hasFT = tokenInfo.genesisSupplyFT > 0n
   const showPrimarySupply = !tokenInfo.issuingUtxosError && !!metadataInfo?.tokenMetadata && hasFT
 
-  // Resolve the Electrum-verified reserved / naive-circulating figures.
+  // Provable burns (OP_RETURN outputs, tokenburner.cash). They're queried regardless of
+  // spent state, so unlike reserved supply they can't be thrown off by stale UTXO data.
+  const knownBurns = tokenInfo.knownBurns
+  const knownBurnedFT = knownBurns?.burnedFT ?? 0n
+  // The burn query lands after Phase 1, so circulating supply waits for it rather than flash a pre-burn figure
+  const burnsPending = !knownBurns && !tokenInfo.burnsError
+  const hasKnownBurns = !!knownBurns && (knownBurns.burnedFT > 0n || knownBurns.burnedNFTs > 0)
+
+  // Resolve reserved supply (Chaingraph, or Electrum-verified) and circulating = genesis − reserved − known burns.
   const supply = (() => {
     if (!showPrimarySupply) return null
+    const withCirculating = <T extends { reservedFT: bigint }>(figures: T) =>
+      ({ ...figures, circulating: tokenInfo.genesisSupplyFT - figures.reservedFT - knownBurnedFT })
     if (!electrumVerification) {
-      if (!electrumEnabled) {
-        if (!tokenInfo.reservedSupplyFT) return { state: 'none' } as const
-        return {
-          state: 'chaingraph' as const,
-          reservedFT: tokenInfo.reservedSupplyFT,
-          naiveCirculating: tokenInfo.genesisSupplyFT - tokenInfo.reservedSupplyFT
-        }
-      }
-      return { state: extendedInfo ? 'fetching-electrum' : 'loading' } as const
+      if (electrumEnabled) return { state: extendedInfo ? 'fetching-electrum' : 'loading' } as const
+      return withCirculating({ state: 'chaingraph' as const, reservedFT: tokenInfo.reservedSupplyFT })
     }
     if (electrumVerification.error) {
-      if (!tokenInfo.reservedSupplyFT) return { state: 'none' } as const
-      return {
-        state: 'unverified' as const,
-        reservedFT: tokenInfo.reservedSupplyFT,
-        naiveCirculating: tokenInfo.genesisSupplyFT - tokenInfo.reservedSupplyFT
-      }
+      return withCirculating({ state: 'unverified' as const, reservedFT: tokenInfo.reservedSupplyFT })
     }
-    const reservedFT = electrumVerification.electrumReservedFT
-    if (!reservedFT) return { state: 'none' } as const
-    return {
+    return withCirculating({
       state: 'verified' as const,
-      reservedFT,
-      naiveCirculating: tokenInfo.genesisSupplyFT - reservedFT,
+      reservedFT: electrumVerification.electrumReservedFT,
       exactMatch: electrumVerification.electrumReservedFT === tokenInfo.reservedSupplyFT
-    }
+    })
   })()
+  const supplyFigures = supply && 'circulating' in supply ? supply : null
+  const loadingValue = (text: string) => <span style={{ color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.9rem' }}>{text}</span>
+  // With nothing reserved or burned the circulating figure would just repeat genesis supply
+  const showCirculating = !!supplyFigures && (supplyFigures.reservedFT > 0n || knownBurnedFT > 0n || burnsPending || !!tokenInfo.burnsError)
 
-  // Chaingraph-derived burned & circulating-excl-burns figures.
-  const burned = extendedInfo ? tokenInfo.genesisSupplyFT - extendedInfo.totalSupplyFT : undefined
-  const circulatingExclBurns = extendedInfo ? extendedInfo.totalSupplyFT - tokenInfo.reservedSupplyFT : undefined
+  // Chaingraph UTXO-sum figures: genesis minus everything still unspent is every burn,
+  // including implicit ones (tokens left out of a transaction's outputs), which can't be
+  // attributed to an output. Less reliable than the above when Chaingraph is stale.
+  const allBurnedFT = extendedInfo ? tokenInfo.genesisSupplyFT - extendedInfo.totalSupplyFT : undefined
+  const implicitBurnedFT = allBurnedFT !== undefined && knownBurns ? allBurnedFT - knownBurns.burnedFT : undefined
+  const circulatingFromUtxos = extendedInfo ? extendedInfo.totalSupplyFT - tokenInfo.reservedSupplyFT : undefined
+  const showUtxoSumFigures = !!extendedInfo && hasFT
 
   const reservedUtxos = tokenInfo.reservedSupplyUtxos.filter(utxo => utxo.isAuthhead || utxo.fungibleTokenAmount > 0n)
   const covenantUtxos = reservedUtxos.filter(utxo => !utxo.isAuthhead && !utxo.lockingBytecode.startsWith('76a914'))
@@ -204,41 +258,45 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
     <div className={`card ${styles.section}`}>
       <SectionTitle>Supply</SectionTitle>
 
-      {(tokenInfo.genesisInfoError || tokenInfo.issuingUtxosError) && (
+      {(tokenInfo.genesisInfoError || tokenInfo.issuingUtxosError || tokenInfo.burnsError) && (
         <div className="note note-warn" style={{ marginBottom: '16px' }}>
           {tokenInfo.genesisInfoError && <div>{tokenInfo.genesisInfoError} — genesis supply and NFT presence can&apos;t be shown.</div>}
           {tokenInfo.issuingUtxosError && <div>{tokenInfo.issuingUtxosError} — reserved supply can&apos;t be shown.</div>}
+          {tokenInfo.burnsError && <div>{tokenInfo.burnsError} — circulating supply doesn&apos;t subtract burned tokens.</div>}
         </div>
       )}
 
       {/* Headline supply figures */}
-      {(hasFT || (extendedInfo && extendedInfo.totalSupplyNFTs > 0)) && (
+      {(hasFT || hasKnownBurns || (extendedInfo && extendedInfo.totalSupplyNFTs > 0)) && (
         <StatGrid>
           {hasFT && (
             <Stat label="Genesis supply" value={displayTokenAmount(tokenInfo.genesisSupplyFT)} />
           )}
 
-          {supply?.state === 'verified' && (
-            <>
-              <Stat label="Circulating supply (naive)" value={displayTokenAmount(supply.naiveCirculating)} />
-              <Stat label="Reserved supply" value={displayTokenAmount(supply.reservedFT)} />
-            </>
+          {supplyFigures && showCirculating && (
+            <Stat
+              label="Circulating supply"
+              value={burnsPending ? loadingValue('loading burns…') : displayTokenAmount(supplyFigures.circulating)}
+              sub={tokenInfo.burnsError ? '(burns not included)' : undefined}
+            />
           )}
-          {(supply?.state === 'unverified' || supply?.state === 'chaingraph') && (
-            <>
-              <Stat label="Circulating supply (naive)" value={displayTokenAmount(supply.naiveCirculating)} />
-              <Stat label="Reserved supply" value={displayTokenAmount(supply.reservedFT)} sub={supply.state === 'unverified' ? '(unverified)' : undefined} />
-            </>
+          {supplyFigures && supplyFigures.reservedFT > 0n && (
+            <Stat label="Reserved supply" value={displayTokenAmount(supplyFigures.reservedFT)} sub={supplyFigures.state === 'unverified' ? '(unverified)' : undefined} />
           )}
           {(supply?.state === 'loading' || supply?.state === 'fetching-electrum') && (
-            <Stat label="Circulating supply" value={<span style={{ color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.9rem' }}>{supply.state === 'loading' ? 'loading…' : 'verifying via Electrum…'}</span>} />
+            <Stat label="Circulating supply" value={loadingValue(supply.state === 'loading' ? 'loading…' : 'verifying via Electrum…')} />
           )}
 
-          {burned !== undefined && burned > 0n && (
-            <Stat label="Burned" value={displayTokenAmount(burned)} />
-          )}
-          {circulatingExclBurns !== undefined && hasFT && (
-            <Stat label="Circulating (excl. burns)" value={displayTokenAmount(circulatingExclBurns)} />
+          {knownBurns && hasKnownBurns && (
+            knownBurns.burnedFT > 0n ? (
+              <Stat
+                label="Burned"
+                value={displayTokenAmount(knownBurns.burnedFT)}
+                sub={knownBurns.burnedNFTs > 0 ? `+ ${pluralNfts(knownBurns.burnedNFTs)}` : undefined}
+              />
+            ) : (
+              <Stat label="Burned" value={pluralNfts(knownBurns.burnedNFTs)} />
+            )
           )}
 
           {extendedInfo && extendedInfo.totalSupplyNFTs > 0 && (
@@ -261,12 +319,21 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
           )}
         </div>
       )}
-      {supply?.state === 'none' && (
-        <div className="note note-success" style={{ marginTop: '14px' }}>No reserved supply — the full supply is circulating.</div>
+      {supplyFigures && supplyFigures.reservedFT === 0n && (
+        <div className="note note-success" style={{ marginTop: '14px' }}>
+          {knownBurns?.burnedFT === 0n ? 'No reserved supply — the full supply is circulating.' : 'No reserved supply.'}
+        </div>
+      )}
+
+      {/* Known burns (OP_RETURN outputs and the tokenburner.cash contract) */}
+      {knownBurns && hasKnownBurns && (
+        <div style={{ marginTop: '14px' }}>
+          <BurnList knownBurns={knownBurns} displayTokenAmount={displayTokenAmount} />
+        </div>
       )}
 
       {/* Reserved-supply UTXO breakdown */}
-      {(supply?.state === 'verified' || supply?.state === 'unverified' || supply?.state === 'chaingraph') && reservedSummaryParts.length > 0 && (
+      {supplyFigures && reservedSummaryParts.length > 0 && (
         <details className="disclosure" style={{ marginTop: '14px' }}>
           <summary>Reserved supply held on {reservedSummaryParts.join(' and ')}</summary>
           <div className="disclosure-body">
@@ -322,10 +389,25 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
             </div>
           )}
 
-          {showElectrumChaingraphReserved && (
-            <Rows>
-              <Row label="Reserved supply (Chaingraph)">{displayTokenAmount(tokenInfo.reservedSupplyFT)}</Row>
-            </Rows>
+          {(showElectrumChaingraphReserved || showUtxoSumFigures) && (
+            <div style={{ marginBottom: '14px' }}>
+              <Rows>
+                {showElectrumChaingraphReserved && (
+                  <Row label="Reserved supply (Chaingraph)">{displayTokenAmount(tokenInfo.reservedSupplyFT)}</Row>
+                )}
+                {showUtxoSumFigures && allBurnedFT !== undefined && circulatingFromUtxos !== undefined && (
+                  <>
+                    {allBurnedFT !== 0n && (
+                      <Row label="All burns incl. implicit (genesis − unspent)">{displayTokenAmount(allBurnedFT)}</Row>
+                    )}
+                    {implicitBurnedFT !== undefined && implicitBurnedFT !== 0n && (
+                      <Row label="Implicit burns (all − known burns)">{displayTokenAmount(implicitBurnedFT)}</Row>
+                    )}
+                    <Row label="Circulating excl. all burns (unspent − reserved)">{displayTokenAmount(circulatingFromUtxos)}</Row>
+                  </>
+                )}
+              </Rows>
+            </div>
           )}
 
           {metadataInfo?.httpsUrl && (
