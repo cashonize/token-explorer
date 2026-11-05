@@ -284,7 +284,7 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
             <Stat
               label={<>Circulating supply<InfoTip>
                 Genesis supply minus reserved supply and provably burned tokens. Tokens lost in
-                transactions (e.g. through wallet bugs) are not subtracted; see Holders &amp; detailed supply.
+                transactions (left out of a transaction&apos;s outputs) are not subtracted; see Holders &amp; detailed supply.
               </InfoTip></>}
               value={burnsPending ? loadingValue('loading burns…') : displayTokenAmount(supplyFigures.circulating)}
               sub={tokenInfo.burnsError ? '(burns not included)' : undefined}
@@ -435,7 +435,7 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
                 {lostFT !== undefined && lostFT > 0n && (
                   <Row indent label={<>Lost in transactions<InfoTip>
                     Tokens left out of a transaction&apos;s outputs, so they stopped existing without a
-                    burn output, e.g. through a wallet bug.
+                    burn output: through a wallet bug, or by a contract that destroys tokens this way.
                   </InfoTip></>}>{displayTokenAmount(lostFT)}</Row>
                 )}
                 {knownBurns && knownBurns.burnedNFTs > 0 && (
