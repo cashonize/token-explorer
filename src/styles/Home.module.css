@@ -442,7 +442,6 @@
 .checkFail { background: var(--danger-bg); color: var(--danger-text); }
 .checkUnknown { background: var(--surface-muted); color: var(--text-muted); }
 
-/* Indented child row, e.g. the parts of a total */
 /* ---------- Info tooltip (ui.tsx InfoTip) ---------- */
 .infoTip {
   position: relative;
