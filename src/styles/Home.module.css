@@ -541,16 +541,12 @@
 .burnList {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
 }
 .burnRow {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 10px;
-  padding: 8px 12px;
+  padding: 8px 4px;
   border-top: 1px solid var(--border);
   color: var(--text);
   font-size: 0.88rem;
@@ -558,17 +554,26 @@
 }
 .burnRow:first-child { border-top: none; }
 .burnRow:hover { background: var(--surface-muted); text-decoration: none; }
-.burnRowDate { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.burnRowDate { color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.burnRowSep { color: var(--text-muted); }
 .burnRowTx {
   margin-left: auto;
   font-family: var(--font-mono);
   font-size: 0.82em;
   color: var(--text-secondary);
+  white-space: nowrap;
 }
 .burnRow:hover .burnRowTx { color: var(--accent-dark); }
 @media (max-width: 600px) {
-  /* date + amount on the first line, the tx link on the second */
-  .burnRowTx { flex-basis: 100%; margin-left: 0; }
+  /* exactly two lines: date and amount, then the tx link */
+  .burnRow {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2px 10px;
+  }
+  .burnRowSep { display: none; }
+  .burnRowAmount { justify-self: end; text-align: right; }
+  .burnRowTx { grid-column: 1 / -1; margin-left: 0; }
 }
 .showMore {
   margin-top: 10px;

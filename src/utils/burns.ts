@@ -32,7 +32,7 @@ export function aggregateBurns(entries: BurnEntry[]): KnownBurns {
 }
 
 export type SupplyRemovalRow =
-  | { kind: 'removed', amount: bigint }
+  | { kind: 'total', amount: bigint }
   | { kind: 'burned' | 'withoutBurnOutput', amount: bigint, indent: boolean }
 
 /**
@@ -49,14 +49,14 @@ export function supplyRemovalRows(removedFT: bigint | undefined, burnedFT: bigin
   if (removedFT === undefined) return { rows: burnedRow(false), inconsistent: false }
   if (removedFT < 0n) return { rows: burnedRow(false), inconsistent: true }
   if (burnedFT === undefined) {
-    return { rows: removedFT > 0n ? [{ kind: 'removed', amount: removedFT }] : [], inconsistent: false }
+    return { rows: removedFT > 0n ? [{ kind: 'total', amount: removedFT }] : [], inconsistent: false }
   }
   const withoutBurnOutputFT = removedFT - burnedFT
   if (withoutBurnOutputFT < 0n) return { rows: burnedRow(false), inconsistent: true }
   if (burnedFT > 0n && withoutBurnOutputFT > 0n) {
     return {
       rows: [
-        { kind: 'removed', amount: removedFT },
+        { kind: 'total', amount: removedFT },
         { kind: 'burned', amount: burnedFT, indent: true },
         { kind: 'withoutBurnOutput', amount: withoutBurnOutputFT, indent: true },
       ],

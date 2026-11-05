@@ -140,7 +140,7 @@ describe('supplyRemovalRows', () => {
   it('shows the total with both parts indented when both are > 0 (DogeCash)', () => {
     expect(supplyRemovalRows(167_147_544n, 535n)).toEqual({
       rows: [
-        { kind: 'removed', amount: 167_147_544n },
+        { kind: 'total', amount: 167_147_544n },
         { kind: 'burned', amount: 535n, indent: true },
         { kind: 'withoutBurnOutput', amount: 167_147_009n, indent: true },
       ],
@@ -170,7 +170,7 @@ describe('supplyRemovalRows', () => {
   })
 
   it('shows only the total when the burn query failed', () => {
-    expect(supplyRemovalRows(500n, undefined)).toEqual({ rows: [{ kind: 'removed', amount: 500n }], inconsistent: false })
+    expect(supplyRemovalRows(500n, undefined)).toEqual({ rows: [{ kind: 'total', amount: 500n }], inconsistent: false })
   })
 
   it('never shows a negative figure: stale data (unspent > genesis, or > genesis − burns) is flagged', () => {
