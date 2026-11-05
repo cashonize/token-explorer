@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { lockingBytecodeToCashAddress, hexToBin } from '@bitauth/libauth'
 import { TOKENBURNER_LOCKING_BYTECODE } from '@/constants'
 import type { BurnEntry } from '@/interfaces'
-import { aggregateBurns, groupBurnsByTransaction, isKnownBurnLockingBytecode } from './burns'
+import { aggregateBurns, groupBurnsByTransaction, isKnownBurnLockingBytecode, supplyRemovalRows } from './burns'
 import { parseBurnRows, type BurnOutputRow } from './queryChainGraph'
 
 const burn = (overrides: Partial<BurnEntry> & Pick<BurnEntry, 'txHash'>): BurnEntry => ({
@@ -133,5 +133,48 @@ describe('groupBurnsByTransaction', () => {
     ])
     expect(tx?.methods).toEqual(['op_return', 'tokenburner'])
     expect(tx?.fungibleTokenAmount).toBe(6n)
+  })
+})
+
+describe('supplyRemovalRows', () => {
+  it('shows the total with both parts indented when both are > 0 (DogeCash)', () => {
+    expect(supplyRemovalRows(167_147_544n, 535n)).toEqual({
+      rows: [
+        { kind: 'removed', amount: 167_147_544n },
+        { kind: 'burned', amount: 535n, indent: true },
+        { kind: 'withoutBurnOutput', amount: 167_147_009n, indent: true },
+      ],
+      withoutBurnOutputFT: 167_147_009n,
+      inconsistent: false,
+    })
+  })
+
+  it('shows a single "removed without a burn output" row when nothing was burned (Furu)', () => {
+    const result = supplyRemovalRows(747_867_544n, 0n)
+    expect(result.rows).toEqual([{ kind: 'withoutBurnOutput', amount: 747_867_544n, indent: false }])
+    expect(result.withoutBurnOutputFT).toBe(747_867_544n)
+  })
+
+  it('shows a single "sent to a burn output" row when every removal is a burn', () => {
+    const result = supplyRemovalRows(1000n, 1000n)
+    expect(result.rows).toEqual([{ kind: 'burned', amount: 1000n, indent: false }])
+    expect(result.withoutBurnOutputFT).toBe(0n)
+  })
+
+  it('shows nothing when nothing was removed', () => {
+    expect(supplyRemovalRows(0n, 0n).rows).toEqual([])
+  })
+
+  it('shows only the burns before holder data has loaded', () => {
+    expect(supplyRemovalRows(undefined, 42n)).toEqual({ rows: [{ kind: 'burned', amount: 42n, indent: false }], inconsistent: false })
+  })
+
+  it('shows only the total when the burn query failed', () => {
+    expect(supplyRemovalRows(500n, undefined)).toEqual({ rows: [{ kind: 'removed', amount: 500n }], inconsistent: false })
+  })
+
+  it('never shows a negative figure: stale data (unspent > genesis, or > genesis − burns) is flagged', () => {
+    expect(supplyRemovalRows(-5n, 10n)).toEqual({ rows: [{ kind: 'burned', amount: 10n, indent: false }], inconsistent: true })
+    expect(supplyRemovalRows(5n, 10n)).toEqual({ rows: [{ kind: 'burned', amount: 10n, indent: false }], inconsistent: true })
   })
 })

@@ -31,6 +31,45 @@ export function aggregateBurns(entries: BurnEntry[]): KnownBurns {
   return { burnedFT, burnedNFTs, burns }
 }
 
+export type SupplyRemovalRow =
+  | { kind: 'removed', amount: bigint }
+  | { kind: 'burned' | 'withoutBurnOutput', amount: bigint, indent: boolean }
+
+/**
+ * Rows for the "Removed from supply" group. `removedFT` is genesis minus all unspent FT
+ * (undefined until the holder query loaded), `burnedFT` the FT sent to burn outputs
+ * (undefined if the burn query failed). Removed = burned + removed without a burn output.
+ * The total with both parts indented only when both parts are > 0; otherwise the one
+ * non-zero part as a single row. Negative figures mean stale Chaingraph data: they're
+ * never shown, and `inconsistent` is set instead.
+ */
+export function supplyRemovalRows(removedFT: bigint | undefined, burnedFT: bigint | undefined): { rows: SupplyRemovalRow[], withoutBurnOutputFT?: bigint, inconsistent: boolean } {
+  const burnedRow = (indent: boolean): SupplyRemovalRow[] =>
+    burnedFT !== undefined && burnedFT > 0n ? [{ kind: 'burned', amount: burnedFT, indent }] : []
+  if (removedFT === undefined) return { rows: burnedRow(false), inconsistent: false }
+  if (removedFT < 0n) return { rows: burnedRow(false), inconsistent: true }
+  if (burnedFT === undefined) {
+    return { rows: removedFT > 0n ? [{ kind: 'removed', amount: removedFT }] : [], inconsistent: false }
+  }
+  const withoutBurnOutputFT = removedFT - burnedFT
+  if (withoutBurnOutputFT < 0n) return { rows: burnedRow(false), inconsistent: true }
+  if (burnedFT > 0n && withoutBurnOutputFT > 0n) {
+    return {
+      rows: [
+        { kind: 'removed', amount: removedFT },
+        { kind: 'burned', amount: burnedFT, indent: true },
+        { kind: 'withoutBurnOutput', amount: withoutBurnOutputFT, indent: true },
+      ],
+      withoutBurnOutputFT,
+      inconsistent: false,
+    }
+  }
+  if (withoutBurnOutputFT > 0n) {
+    return { rows: [{ kind: 'withoutBurnOutput', amount: withoutBurnOutputFT, indent: false }], withoutBurnOutputFT, inconsistent: false }
+  }
+  return { rows: burnedRow(false), withoutBurnOutputFT, inconsistent: false }
+}
+
 export interface BurnTransaction {
   txHash: string
   /** block timestamp, undefined while unconfirmed */

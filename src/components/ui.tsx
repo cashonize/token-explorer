@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import styles from '@/styles/Home.module.css'
 
 type Tone = 'success' | 'warn' | 'info' | 'purple' | 'danger' | 'neutral'
@@ -15,7 +15,7 @@ export function SectionTitle({ children }: { children: ReactNode }) {
   return <div className={styles.sectionTitle}>{children}</div>
 }
 
-export function Stat({ label, value, sub, secondary = false }: { label: ReactNode; value: ReactNode; sub?: ReactNode; secondary?: boolean }) {
+export function Stat({ label, value, sub, note, secondary = false }: { label: ReactNode; value: ReactNode; sub?: ReactNode; note?: ReactNode; secondary?: boolean }) {
   return (
     <div className={`${styles.stat}${secondary ? ` ${styles.statSecondary}` : ''}`}>
       <div className={styles.statLabel}>{label}</div>
@@ -23,6 +23,7 @@ export function Stat({ label, value, sub, secondary = false }: { label: ReactNod
         {value}
         {sub != null && <span className={styles.statSub}>{sub}</span>}
       </div>
+      {note != null && <div className={styles.statNote}>{note}</div>}
     </div>
   )
 }
@@ -68,28 +69,67 @@ export function HashLink({ hash, href, truncate = false }: { hash: string; href:
 }
 
 /**
- * Small "i" button explaining a term. Shows on hover and keyboard focus, and toggles on
- * click/tap (touch has no hover); Escape or leaving the button closes it. The text is
- * linked with aria-describedby, so screen readers read it with the button.
+ * Small "i" button explaining a term. Opens on mouse hover and keyboard focus; a click or
+ * tap toggles it (touch has no hover, and iOS Safari doesn't focus a tapped button, so a
+ * pointerdown outside closes it too). Escape closes it however it was opened. The text is
+ * linked with aria-describedby; `label` names the button, e.g. "About circulating supply".
  */
-export function InfoTip({ children, label = 'More info' }: { children: ReactNode; label?: string }) {
+export function InfoTip({ children, label }: { children: ReactNode; label: string }) {
   const id = useId()
-  const [open, setOpen] = useState(false)
+  const [visible, setVisible] = useState(false)
+  const rootRef = useRef<HTMLSpanElement>(null)
+  const bubbleRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    if (!visible) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && rootRef.current?.contains(event.target)) return
+      setVisible(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') setVisible(false) }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [visible])
+
+  // Keep the bubble inside the viewport: shift it sideways, and flip it below the button
+  // when there's no room above
+  useLayoutEffect(() => {
+    const bubble = bubbleRef.current
+    if (!visible || !bubble) return
+    bubble.style.removeProperty('--tip-shift')
+    bubble.removeAttribute('data-below')
+    const margin = 8
+    const rect = bubble.getBoundingClientRect()
+    const shift = rect.left < margin ? margin - rect.left
+      : rect.right > window.innerWidth - margin ? window.innerWidth - margin - rect.right : 0
+    bubble.style.setProperty('--tip-shift', `${shift}px`)
+    if (rect.top < margin) bubble.setAttribute('data-below', '')
+  }, [visible])
+
   return (
-    <span className={`${styles.infoTip}${open ? ` ${styles.infoTipOpen}` : ''}`}>
+    <span
+      ref={rootRef}
+      className={`${styles.infoTip}${visible ? ` ${styles.infoTipOpen}` : ''}`}
+      onPointerEnter={event => { if (event.pointerType === 'mouse') setVisible(true) }}
+      onPointerLeave={event => { if (event.pointerType === 'mouse') setVisible(false) }}
+    >
       <button
         type="button"
         className={styles.infoTipButton}
         aria-label={label}
         aria-describedby={id}
-        aria-expanded={open}
-        onClick={() => setOpen(isOpen => !isOpen)}
-        onBlur={() => setOpen(false)}
-        onKeyDown={event => { if (event.key === 'Escape') setOpen(false) }}
+        aria-expanded={visible}
+        onClick={() => setVisible(isVisible => !isVisible)}
+        onFocus={event => { if (event.currentTarget.matches(':focus-visible')) setVisible(true) }}
+        onBlur={() => setVisible(false)}
       >
-        i
+        <span className={styles.infoTipIcon} aria-hidden="true">i</span>
       </button>
-      <span role="tooltip" id={id} className={styles.infoTipBubble}>{children}</span>
+      <span ref={bubbleRef} role="tooltip" id={id} className={styles.infoTipBubble}>{children}</span>
     </span>
   )
 }
