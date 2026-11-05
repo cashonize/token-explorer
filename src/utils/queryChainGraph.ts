@@ -365,9 +365,8 @@ async function fetchAllPages(
  */
 export function parseBurnRows(rows: BurnOutputRow[], method: BurnMethod): BurnEntry[] {
   return rows.flatMap(row => {
-    const tx = row.transaction
-    if (!tx || (tx.node_validations.length === 0 && tx.block_inclusions.length === 0)) return []
-    const blockTimestamp = tx.block_inclusions[0]?.block.timestamp
+    if (!isValidOutput(row)) return []
+    const blockTimestamp = row.transaction?.block_inclusions[0]?.block.timestamp
     return [{
       txHash: row.transaction_hash.slice(2),
       vout: Number(row.output_index),
