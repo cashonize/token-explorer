@@ -11,6 +11,12 @@ interface ChaingraphOutput {
   nonfungible_token_capability?: string | null
 }
 
+/**
+ * Cross-check Chaingraph's unspent token outputs against Electrum. `chaingraphOutputs` must
+ * already exclude known burns (OP_RETURN and burner-contract outputs, see utils/burns.ts):
+ * those are counted as burned, and an unswept burner output would otherwise come back from
+ * Electrum as a holding.
+ */
 export async function verifySupplyViaElectrum(
   chaingraphOutputs: ChaingraphOutput[],
   tokenId: string,

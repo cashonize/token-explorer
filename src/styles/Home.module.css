@@ -299,6 +299,13 @@
   word-break: break-word;
 }
 
+.statNote {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
 .statSub {
   font-size: 0.78rem;
   color: var(--text-muted);
@@ -434,6 +441,136 @@
 .checkPass { background: var(--success-bg); color: var(--success-text); }
 .checkFail { background: var(--danger-bg); color: var(--danger-text); }
 .checkUnknown { background: var(--surface-muted); color: var(--text-muted); }
+
+/* ---------- Info tooltip (ui.tsx InfoTip) ---------- */
+.infoTip {
+  position: relative;
+  display: inline-block;
+  margin: -4px 0 -4px 1px;
+  vertical-align: middle;
+}
+
+/* 24x24 hit area around a 16px icon */
+.infoTipButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: help;
+}
+.infoTipIcon {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text-muted);
+  font: italic 700 10px/14px Georgia, 'Times New Roman', serif;
+  text-align: center;
+}
+.infoTipButton:hover .infoTipIcon,
+.infoTipOpen .infoTipIcon { color: var(--text); border-color: var(--text-muted); }
+.infoTipButton:focus-visible { outline: none; }
+.infoTipButton:focus-visible .infoTipIcon { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+
+/* Above the button, so it doesn't cover the figure it explains. display:none while closed, so
+   it never widens the page; aria-describedby still reads it. --tip-shift keeps it on screen. */
+.infoTipBubble {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(calc(-50% + var(--tip-shift, 0px)));
+  width: max-content;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--text);
+  color: var(--surface);
+  box-shadow: var(--shadow-lg);
+  font-size: 0.8rem;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.45;
+  letter-spacing: normal;
+  text-align: left;
+  text-transform: none;
+  white-space: normal;
+}
+.infoTipBubble[data-below] {
+  bottom: auto;
+  top: calc(100% + 6px);
+}
+/* bridges the 6px gap, so moving the mouse onto the bubble doesn't close it */
+.infoTipBubble::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 8px;
+}
+.infoTipBubble[data-below]::after {
+  top: auto;
+  bottom: 100%;
+}
+.infoTipOpen .infoTipBubble { display: block; }
+
+/* ---------- Burn transaction list ---------- */
+.burnList {
+  display: flex;
+  flex-direction: column;
+}
+.burnRow {
+  display: flex;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 8px 4px;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.88rem;
+  text-decoration: none;
+}
+.burnRow:first-child { border-top: none; }
+.burnRow:hover { background: var(--surface-muted); text-decoration: none; }
+.burnRowDate { color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.burnRowSep { color: var(--text-muted); }
+.burnRowTx {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.burnRow:hover .burnRowTx { color: var(--accent-dark); }
+@media (max-width: 600px) {
+  /* exactly two lines: date and amount, then the tx link */
+  .burnRow {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2px 10px;
+  }
+  .burnRowSep { display: none; }
+  .burnRowAmount { justify-self: end; text-align: right; }
+  .burnRowTx { grid-column: 1 / -1; margin-left: 0; }
+}
+.showMore {
+  margin-top: 10px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.showMore:hover { border-color: var(--text-muted); }
 
 /* ---------- Timeline / UTXO entries ---------- */
 .entry {
