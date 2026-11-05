@@ -29,7 +29,7 @@ pnpm test         # Vitest unit tests
 
 ### The model
 Everything the page shows is derived in the browser from four sources, and none of them is fully trusted:
-- **Chaingraph** for on-chain facts: genesis outputs, unspent token outputs, the authchain. Queries are in `src/utils/queryChainGraph.ts`, typed from the schema by `chaingraph-ts` (gql.tada). The default instance is public; `NEXT_PUBLIC_CHAINGRAPH_URL` points the build at another one.
+- **Chaingraph** for on-chain facts: genesis outputs, unspent token outputs, the authchain. Queries are in `src/utils/queryChainGraph.ts`, typed from the schema by `chaingraph-ts` (gql.tada). The default instance is public; `NEXT_PUBLIC_CHAINGRAPH_URL` points the build at another one. Instances run different codebases: upstream [bitauth/chaingraph](https://github.com/bitauth/chaingraph), or forks such as [ParyonUSD/chaingraph](https://github.com/ParyonUSD/chaingraph), which adds many fixes (a `token_category` index, expiry of transactions dropped from the mempool, reorg and mempool resync fixes, write-path performance). Query speed and how dropped transactions show up differ a lot between them. The deployed site sets `NEXT_PUBLIC_CHAINGRAPH_URL` to its own instance, so the public default is what local builds and forks of this repo get, not what tokenexplorer.cash users see. When testing or measuring a query, note which instance and codebase you hit.
 - **The token's BCMR registry**, found by following the authchain to its latest publication output and fetched from the URI it commits to.
 - **OpenTokenRegistry** (https://otr.cash), only to check whether the tokenId is listed.
 - **Electrum** (opt-in), to cross-check Chaingraph's UTXO set against a full node, because a Chaingraph instance can serve stale data.
