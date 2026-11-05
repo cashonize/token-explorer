@@ -226,8 +226,10 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
   })()
   const supplyFigures = supply && 'circulating' in supply ? supply : null
   const loadingValue = (text: string) => <span style={{ color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.9rem' }}>{text}</span>
-  // With nothing reserved or burned the circulating figure would just repeat genesis supply
-  const showCirculating = !!supplyFigures && (supplyFigures.reservedFT > 0n || knownBurnedFT > 0n || burnsPending || !!tokenInfo.burnsError)
+  // With nothing reserved or burned the circulating figure would just repeat genesis supply.
+  // While burns are pending it only shows (as "loading burns…") when there's a reserve, so a
+  // token without reserve or burns doesn't get a card that disappears once burns load as 0.
+  const showCirculating = !!supplyFigures && (supplyFigures.reservedFT > 0n || knownBurnedFT > 0n || !!tokenInfo.burnsError)
 
   // Chaingraph UTXO-sum figures: genesis minus everything still unspent is every burn,
   // including implicit ones (tokens left out of a transaction's outputs), which can't be
@@ -236,6 +238,8 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
   const implicitBurnedFT = allBurnedFT !== undefined && knownBurns ? allBurnedFT - knownBurns.burnedFT : undefined
   const circulatingFromUtxos = extendedInfo ? extendedInfo.totalSupplyFT - tokenInfo.reservedSupplyFT : undefined
   const showUtxoSumFigures = !!extendedInfo && hasFT
+  // Unspent > genesis, or unspent > genesis − known burns, means stale or incomplete Chaingraph data
+  const utxoSumInconsistent = (allBurnedFT !== undefined && allBurnedFT < 0n) || (implicitBurnedFT !== undefined && implicitBurnedFT < 0n)
 
   const reservedUtxos = tokenInfo.reservedSupplyUtxos.filter(utxo => utxo.isAuthhead || utxo.fungibleTokenAmount > 0n)
   const covenantUtxos = reservedUtxos.filter(utxo => !utxo.isAuthhead && !utxo.lockingBytecode.startsWith('76a914'))
@@ -319,7 +323,8 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
           )}
         </div>
       )}
-      {supplyFigures && supplyFigures.reservedFT === 0n && (
+      {/* Waits for burns when there's no reserve, so its text doesn't change after it appears */}
+      {supplyFigures && supplyFigures.reservedFT === 0n && !burnsPending && (
         <div className="note note-success" style={{ marginTop: '14px' }}>
           {knownBurns?.burnedFT === 0n ? 'No reserved supply — the full supply is circulating.' : 'No reserved supply.'}
         </div>
@@ -397,16 +402,21 @@ export function SupplyStats({ tokenInfo, extendedInfo, extendedInfoError, metada
                 )}
                 {showUtxoSumFigures && allBurnedFT !== undefined && circulatingFromUtxos !== undefined && (
                   <>
-                    {allBurnedFT !== 0n && (
+                    {allBurnedFT > 0n && (
                       <Row label="All burns incl. implicit (genesis − unspent)">{displayTokenAmount(allBurnedFT)}</Row>
                     )}
-                    {implicitBurnedFT !== undefined && implicitBurnedFT !== 0n && (
+                    {implicitBurnedFT !== undefined && implicitBurnedFT > 0n && (
                       <Row label="Implicit burns (all − known burns)">{displayTokenAmount(implicitBurnedFT)}</Row>
                     )}
                     <Row label="Circulating excl. all burns (unspent − reserved)">{displayTokenAmount(circulatingFromUtxos)}</Row>
                   </>
                 )}
               </Rows>
+              {showUtxoSumFigures && utxoSumInconsistent && (
+                <div className="note note-warn" style={{ marginTop: '10px' }}>
+                  Chaingraph data inconsistent: unspent supply exceeds genesis supply minus known burns, so burns can&apos;t be derived from it.
+                </div>
+              )}
             </div>
           )}
 

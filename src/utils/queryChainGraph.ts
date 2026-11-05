@@ -312,7 +312,7 @@ async function fetchAllPages(
 
 /**
  * Turn burn-query rows into BurnEntry[]. Chaingraph keeps transactions it once saw in a
- * mempool even after they were dropped (ParyonUSD has a dozen such double-spent OP_RETURN
+ * mempool even after they were dropped (ParyonUSD has 14 such double-spent OP_RETURN
  * outputs), so a row only counts if its transaction is in a mempool now or in a block. The
  * usual server-side filter (node_validations or a block with accepted_by) makes these queries
  * time out on large categories, and selecting the block's accepted_by is what's slow, so a
