@@ -30,3 +30,32 @@ export function aggregateBurns(entries: BurnEntry[]): KnownBurns {
   }
   return { burnedFT, burnedNFTs, burns }
 }
+
+export interface BurnTransaction {
+  txHash: string
+  /** block timestamp, undefined while unconfirmed */
+  timestamp?: number
+  methods: BurnEntry['method'][]
+  fungibleTokenAmount: bigint
+  nftCount: number
+}
+
+/**
+ * Group burn outputs by transaction, keeping the input order (latest first from
+ * aggregateBurns). A protocol often burns FT and an NFT in one transaction, e.g. a
+ * closed loan's repaid tokens and its loan NFT.
+ */
+export function groupBurnsByTransaction(burns: BurnEntry[]): BurnTransaction[] {
+  const byTx = new Map<string, BurnTransaction>()
+  for (const burn of burns) {
+    let tx = byTx.get(burn.txHash)
+    if (!tx) {
+      tx = { txHash: burn.txHash, timestamp: burn.timestamp, methods: [], fungibleTokenAmount: 0n, nftCount: 0 }
+      byTx.set(burn.txHash, tx)
+    }
+    if (!tx.methods.includes(burn.method)) tx.methods.push(burn.method)
+    tx.fungibleTokenAmount += burn.fungibleTokenAmount
+    if (burn.nftCapability !== null) tx.nftCount++
+  }
+  return [...byTx.values()]
+}

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { lockingBytecodeToCashAddress, hexToBin } from '@bitauth/libauth'
 import { TOKENBURNER_LOCKING_BYTECODE } from '@/constants'
 import type { BurnEntry } from '@/interfaces'
-import { aggregateBurns, isKnownBurnLockingBytecode } from './burns'
+import { aggregateBurns, groupBurnsByTransaction, isKnownBurnLockingBytecode } from './burns'
 import { parseBurnRows, type BurnOutputRow } from './queryChainGraph'
 
 const burn = (overrides: Partial<BurnEntry> & Pick<BurnEntry, 'txHash'>): BurnEntry => ({
@@ -105,5 +105,33 @@ describe('parseBurnRows', () => {
 
   it('drops a transaction that is neither in a mempool nor in a block (e.g. lost a double-spend)', () => {
     expect(parseBurnRows([row('cc', { node_validations: [], block_inclusions: [] })], 'op_return')).toEqual([])
+  })
+})
+
+describe('groupBurnsByTransaction', () => {
+  it('returns nothing for no burns', () => {
+    expect(groupBurnsByTransaction([])).toEqual([])
+  })
+
+  it('merges the outputs of one transaction (e.g. repaid FT plus a closed loan NFT), keeping order', () => {
+    const { burns } = aggregateBurns([
+      burn({ txHash: 'loan', vout: 2, fungibleTokenAmount: 400n, timestamp: 300 }),
+      burn({ txHash: 'loan', vout: 3, nftCapability: 'mutable', timestamp: 300 }),
+      burn({ txHash: 'older', method: 'tokenburner', fungibleTokenAmount: 7n, timestamp: 100 }),
+    ])
+    expect(groupBurnsByTransaction(burns)).toEqual([
+      { txHash: 'loan', timestamp: 300, methods: ['op_return'], fungibleTokenAmount: 400n, nftCount: 1 },
+      { txHash: 'older', timestamp: 100, methods: ['tokenburner'], fungibleTokenAmount: 7n, nftCount: 0 },
+    ])
+  })
+
+  it('lists each method once for a transaction burning both ways', () => {
+    const [tx] = groupBurnsByTransaction([
+      burn({ txHash: 'mixed', vout: 0, method: 'op_return', fungibleTokenAmount: 1n }),
+      burn({ txHash: 'mixed', vout: 1, method: 'tokenburner', fungibleTokenAmount: 2n }),
+      burn({ txHash: 'mixed', vout: 2, method: 'op_return', fungibleTokenAmount: 3n }),
+    ])
+    expect(tx?.methods).toEqual(['op_return', 'tokenburner'])
+    expect(tx?.fungibleTokenAmount).toBe(6n)
   })
 })

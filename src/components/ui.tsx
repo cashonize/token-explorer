@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useId, useState, type ReactNode } from 'react'
 import styles from '@/styles/Home.module.css'
 
 type Tone = 'success' | 'warn' | 'info' | 'purple' | 'danger' | 'neutral'
@@ -15,9 +15,9 @@ export function SectionTitle({ children }: { children: ReactNode }) {
   return <div className={styles.sectionTitle}>{children}</div>
 }
 
-export function Stat({ label, value, sub }: { label: ReactNode; value: ReactNode; sub?: ReactNode }) {
+export function Stat({ label, value, sub, secondary = false }: { label: ReactNode; value: ReactNode; sub?: ReactNode; secondary?: boolean }) {
   return (
-    <div className={styles.stat}>
+    <div className={`${styles.stat}${secondary ? ` ${styles.statSecondary}` : ''}`}>
       <div className={styles.statLabel}>{label}</div>
       <div className={styles.statValue}>
         {value}
@@ -35,9 +35,9 @@ export function Rows({ children }: { children: ReactNode }) {
   return <div className={styles.rows}>{children}</div>
 }
 
-export function Row({ label, children }: { label: ReactNode; children: ReactNode }) {
+export function Row({ label, children, indent = false }: { label: ReactNode; children: ReactNode; indent?: boolean }) {
   return (
-    <div className={styles.row}>
+    <div className={`${styles.row}${indent ? ` ${styles.rowIndent}` : ''}`}>
       <div className={styles.rowLabel}>{label}</div>
       <div className={styles.rowValue}>{children}</div>
     </div>
@@ -64,5 +64,32 @@ export function HashLink({ hash, href, truncate = false }: { hash: string; href:
     <a className={styles.hashLink} href={href} target="_blank" rel="noreferrer">
       {display}
     </a>
+  )
+}
+
+/**
+ * Small "i" button explaining a term. Shows on hover and keyboard focus, and toggles on
+ * click/tap (touch has no hover); Escape or leaving the button closes it. The text is
+ * linked with aria-describedby, so screen readers read it with the button.
+ */
+export function InfoTip({ children, label = 'More info' }: { children: ReactNode; label?: string }) {
+  const id = useId()
+  const [open, setOpen] = useState(false)
+  return (
+    <span className={`${styles.infoTip}${open ? ` ${styles.infoTipOpen}` : ''}`}>
+      <button
+        type="button"
+        className={styles.infoTipButton}
+        aria-label={label}
+        aria-describedby={id}
+        aria-expanded={open}
+        onClick={() => setOpen(isOpen => !isOpen)}
+        onBlur={() => setOpen(false)}
+        onKeyDown={event => { if (event.key === 'Escape') setOpen(false) }}
+      >
+        i
+      </button>
+      <span role="tooltip" id={id} className={styles.infoTipBubble}>{children}</span>
+    </span>
   )
 }

@@ -238,6 +238,8 @@ export default function App() {
     let authHeadVout = 0
     let authHeadAddress: string | undefined
     let authHeadBurned = false
+    // Outpoints ("txHash:vout") counted as reserved supply, left out of the user/contract split in Phase 2
+    let reservedOutpoints = new Set<string>()
 
     try {
       // Start all queries in parallel, but don't block on the slow holder query
@@ -401,6 +403,7 @@ export default function App() {
         })
       }
 
+      reservedOutpoints = new Set(reservedSupplyUtxos.map(u => `${u.txHash}:${u.vout}`))
       const authheadAdded = !authHeadAlreadyIncluded && reservedSupplyUtxos.some(u => u.isAuthhead)
       const reservedSupplyFT = covenantReservedFT + (authheadAdded ? authheadReservedFT : 0n)
 
@@ -479,7 +482,7 @@ export default function App() {
       const totalSupplyFT = calculateTotalSupplyFT(allTokenOutputs)
 
       // Calculate holder stats
-      const { numberHolders, numberTokenAddresses, userSupplyFT, contractSupplyFT } = countUniqueHolders(allTokenOutputs)
+      const { numberHolders, numberTokenAddresses, userSupplyFT, contractSupplyFT } = countUniqueHolders(allTokenOutputs, reservedOutpoints)
 
       // Set extended token info (supply & holder data)
       setExtendedTokenInfo({
