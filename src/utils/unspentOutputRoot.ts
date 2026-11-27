@@ -19,11 +19,22 @@
 
   The node is the one that accepts the token's category transaction (the transaction whose hash is the
   token id). An instance with a single node needs no lookup. When no node accepts it, the explorer uses
-  the generic query, which accepts a transaction seen by any node.
+  the generic query, which accepts a transaction seen by any node. Node lookups belong to one check, so
+  they are redone with it. `unspent_output` returns no rows for a node name the instance doesn't have,
+  so each `unspent_output` query also asks for its node (UNSPENT_OUTPUT_NODE_FIELD); if the node isn't
+  there, the instance has changed, and the query runs again with the generic version.
 */
 
 export const UNSPENT_OUTPUT_ROOT = "unspent_output"
 export const RECHECK_AFTER_MS = 5 * 60_000
+
+/** Root field to add to every `unspent_output` document (which must declare `$node: String!`). */
+export const UNSPENT_OUTPUT_NODE_FIELD = "unspent_output_node: node(where: { name: { _eq: $node } }) { name }"
+
+/** The data UNSPENT_OUTPUT_NODE_FIELD adds: the node, or nothing when the instance doesn't have it. */
+export interface UnspentOutputNodeData {
+  unspent_output_node: { name: string }[]
+}
 
 export interface ChaingraphQueryResult<Data> {
   data?: Data
@@ -44,13 +55,13 @@ interface ChaingraphCapabilities {
 interface CachedCapabilities {
   checkedAt: number
   capabilities: Promise<ChaingraphCapabilities>
+  /** Node per token id, found with these capabilities; small, because the explorer looks at one token at a time */
+  nodeNameByToken: Map<string, Promise<string | undefined>>
 }
 
-const capabilitiesByEndpoint = new Map<string, CachedCapabilities>()
-
-// Node name per endpoint and token id; small, because the explorer looks at one token at a time
 const MAX_CACHED_NODE_LOOKUPS = 50
-const nodeNameByEndpointAndToken = new Map<string, Promise<string | undefined>>()
+
+const capabilitiesByEndpoint = new Map<string, CachedCapabilities>()
 
 const queryCapabilities = `query ChaingraphCapabilities {
   node {
@@ -96,9 +107,9 @@ interface NodesAcceptingTransactionData {
   }[]
 }
 
-function checkCapabilities(endpoint: string, runQuery: ChaingraphQueryRunner): Promise<ChaingraphCapabilities> {
+function checkCapabilities(endpoint: string, runQuery: ChaingraphQueryRunner): CachedCapabilities {
   const cached = capabilitiesByEndpoint.get(endpoint)
-  if (cached && Date.now() - cached.checkedAt < RECHECK_AFTER_MS) return cached.capabilities
+  if (cached && Date.now() - cached.checkedAt < RECHECK_AFTER_MS) return cached
 
   const capabilities = (async () => {
     const result = await runQuery<CapabilitiesData>(queryCapabilities, {})
@@ -114,25 +125,26 @@ function checkCapabilities(endpoint: string, runQuery: ChaingraphQueryRunner): P
     console.warn(`Could not check whether ${endpoint} has ${UNSPENT_OUTPUT_ROOT}; using the generic query.`, error)
     return { hasUnspentOutputRoot: false, nodeNames: [] }
   })
-  capabilitiesByEndpoint.set(endpoint, { checkedAt: Date.now(), capabilities })
-  return capabilities
+  const entry = { checkedAt: Date.now(), capabilities, nodeNameByToken: new Map<string, Promise<string | undefined>>() }
+  capabilitiesByEndpoint.set(endpoint, entry)
+  return entry
 }
 
 function markWithoutUnspentOutputRoot(endpoint: string) {
   capabilitiesByEndpoint.set(endpoint, {
     checkedAt: Date.now(),
     capabilities: Promise.resolve({ hasUnspentOutputRoot: false, nodeNames: [] }),
+    nodeNameByToken: new Map(),
   })
 }
 
 /** Clears what is known about every endpoint (used by tests). */
 export function forgetChaingraphCapabilities() {
   capabilitiesByEndpoint.clear()
-  nodeNameByEndpointAndToken.clear()
 }
 
 function findNodeName(
-  endpoint: string,
+  entry: CachedCapabilities,
   tokenId: string,
   nodeNames: string[],
   runQuery: ChaingraphQueryRunner
@@ -140,11 +152,11 @@ function findNodeName(
   if (nodeNames.length === 1) return Promise.resolve(nodeNames[0])
   if (nodeNames.length === 0) return Promise.resolve(undefined)
 
-  const cacheKey = `${endpoint} ${tokenId}`
-  const cached = nodeNameByEndpointAndToken.get(cacheKey)
+  const cache = entry.nodeNameByToken
+  const cached = cache.get(tokenId)
   if (cached) return cached
 
-  const nodeName = (async () => {
+  const lookUp = async () => {
     const result = await runQuery<NodesAcceptingTransactionData>(queryNodesAcceptingTransaction, { hash: `\\x${tokenId}` })
     if (result.error || !result.data) throw new Error(result.error?.message ?? "no data received")
     const acceptingNodes = new Set<string>()
@@ -156,17 +168,25 @@ function findNodeName(
     }
     // Several accepting nodes (for example two mainnet nodes): take the first by name, so the choice is stable
     return nodeNames.filter(name => acceptingNodes.has(name)).sort()[0]
-  })().catch(error => {
-    nodeNameByEndpointAndToken.delete(cacheKey)
-    console.warn(`Could not find the node for token ${tokenId}; using the generic query.`, error)
-    return undefined
-  })
-
-  if (nodeNameByEndpointAndToken.size >= MAX_CACHED_NODE_LOOKUPS) {
-    const oldestKey = nodeNameByEndpointAndToken.keys().next().value
-    if (oldestKey !== undefined) nodeNameByEndpointAndToken.delete(oldestKey)
   }
-  nodeNameByEndpointAndToken.set(cacheKey, nodeName)
+  // Only a found node stays cached: an unknown or brand-new transaction, or a failed lookup, is looked up again next time
+  const nodeName: Promise<string | undefined> = lookUp().then(
+    found => {
+      if (found === undefined && cache.get(tokenId) === nodeName) cache.delete(tokenId)
+      return found
+    },
+    (error: unknown) => {
+      if (cache.get(tokenId) === nodeName) cache.delete(tokenId)
+      console.warn(`Could not find the node for token ${tokenId}; using the generic query.`, error)
+      return undefined
+    }
+  )
+
+  if (cache.size >= MAX_CACHED_NODE_LOOKUPS) {
+    const oldestTokenId = cache.keys().next().value
+    if (oldestTokenId !== undefined) cache.delete(oldestTokenId)
+  }
+  cache.set(tokenId, nodeName)
   return nodeName
 }
 
@@ -180,8 +200,8 @@ export interface UnspentOutputsRead<Data> {
   endpoint: string
   tokenId: string
   runQuery: ChaingraphQueryRunner
-  /** Reads through `unspent_output` for the given node. */
-  readWithRoot: (nodeName: string) => Promise<ChaingraphQueryResult<Data>>
+  /** Reads through `unspent_output` for the given node, with UNSPENT_OUTPUT_NODE_FIELD in the document. */
+  readWithRoot: (nodeName: string) => Promise<ChaingraphQueryResult<Data & UnspentOutputNodeData>>
   /** Reads through the generic `output` query. */
   readWithoutRoot: () => Promise<ChaingraphQueryResult<Data>>
 }
@@ -189,14 +209,24 @@ export interface UnspentOutputsRead<Data> {
 /** Reads unspent outputs of a token category through `unspent_output` when the endpoint has it, else the generic query. */
 export async function readUnspentOutputs<Data>(read: UnspentOutputsRead<Data>): Promise<ChaingraphQueryResult<Data>> {
   const { endpoint, tokenId, runQuery } = read
-  const capabilities = await checkCapabilities(endpoint, runQuery)
+  const entry = checkCapabilities(endpoint, runQuery)
+  const capabilities = await entry.capabilities
   if (capabilities.hasUnspentOutputRoot) {
-    const nodeName = await findNodeName(endpoint, tokenId, capabilities.nodeNames, runQuery)
+    const nodeName = await findNodeName(entry, tokenId, capabilities.nodeNames, runQuery)
     if (nodeName) {
       const result = await read.readWithRoot(nodeName)
-      if (!isMissingUnspentOutputRoot(result.error)) return result
-      console.warn(`${endpoint} no longer has ${UNSPENT_OUTPUT_ROOT}; using the generic query.`)
-      markWithoutUnspentOutputRoot(endpoint)
+      if (result.data) {
+        const { unspent_output_node: node, ...data } = result.data
+        if (node.length > 0) return { data: data as Data }
+        // The instance behind the URL doesn't have this node (its rows would all be missing): check again next time
+        console.warn(`${endpoint} has no node ${nodeName}; using the generic query.`)
+        if (capabilitiesByEndpoint.get(endpoint) === entry) capabilitiesByEndpoint.delete(endpoint)
+      } else if (isMissingUnspentOutputRoot(result.error)) {
+        console.warn(`${endpoint} no longer has ${UNSPENT_OUTPUT_ROOT}; using the generic query.`)
+        markWithoutUnspentOutputRoot(endpoint)
+      } else {
+        return { error: result.error }
+      }
     }
   }
   const result = await read.readWithoutRoot()

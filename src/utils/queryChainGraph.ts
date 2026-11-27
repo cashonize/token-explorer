@@ -2,7 +2,7 @@ import { graphql, ChaingraphClient } from "chaingraph-ts";
 import { CHAINGRAPH_URL, TOKENBURNER_LOCKING_BYTECODE } from "@/constants";
 import type { AuthchainEntry, BurnEntry, BurnMethod } from "@/interfaces";
 import { isBcmrOutput, parseBcmrPublication } from "./bcmr";
-import { readUnspentOutputs, type ChaingraphQueryRunner } from "./unspentOutputRoot";
+import { readUnspentOutputs, UNSPENT_OUTPUT_NODE_FIELD, type ChaingraphQueryRunner, type UnspentOutputNodeData } from "./unspentOutputRoot";
 
 const chaingraphClient = new ChaingraphClient(CHAINGRAPH_URL);
 
@@ -29,6 +29,7 @@ const queryTotalSupplyFromUnspentOutputs = `query TotalSupplyFTUnspent (
   $tokenId: bytea,
   $node: String!
 ) {
+    ${UNSPENT_OUTPUT_NODE_FIELD}
     output: unspent_output(
       args: { node_name: $node }
       offset: $offset
@@ -50,6 +51,7 @@ const queryIssuingUtxosFromUnspentOutputs = `query IssuingUtxosUnspent (
   $tokenId: bytea,
   $node: String!
 ) {
+    ${UNSPENT_OUTPUT_NODE_FIELD}
     output: unspent_output(
       args: { node_name: $node }
       where: {
@@ -130,7 +132,7 @@ export async function queryAllTokenHolders(tokenId:string, offset:number = 0){
     endpoint: CHAINGRAPH_URL,
     tokenId,
     runQuery,
-    readWithRoot: (node) => runQuery(queryTotalSupplyFromUnspentOutputs, { ...variables, node }),
+    readWithRoot: (node) => runQuery<UnspentTokenOutputs & UnspentOutputNodeData>(queryTotalSupplyFromUnspentOutputs, { ...variables, node }),
     readWithoutRoot: async () => await chaingraphClient.query(queryReqTotalSupply, variables),
   })
   return result.data
@@ -169,7 +171,7 @@ export async function queryIssuingUtxos(tokenId:string){
     endpoint: CHAINGRAPH_URL,
     tokenId,
     runQuery,
-    readWithRoot: (node) => runQuery(queryIssuingUtxosFromUnspentOutputs, { ...variables, node }),
+    readWithRoot: (node) => runQuery<UnspentTokenOutputs & UnspentOutputNodeData>(queryIssuingUtxosFromUnspentOutputs, { ...variables, node }),
     readWithoutRoot: async () => await chaingraphClient.query(queryReqIssuingUtxos, variables),
   })
   return result.data

@@ -5,6 +5,7 @@ import {
   readUnspentOutputs,
   type ChaingraphQueryResult,
   type ChaingraphQueryRunner,
+  type UnspentOutputNodeData,
 } from "./unspentOutputRoot"
 
 const endpoint = "https://chaingraph.example/v1/graphql"
@@ -55,9 +56,19 @@ function fakeInstance(instance: FakeInstance) {
 }
 
 // Reads that record which way the outputs were read
-function fakeReads(withRootResult: ChaingraphQueryResult<string> = { data: "from unspent_output" }) {
-  const readWithRoot = vi.fn<(nodeName: string) => Promise<ChaingraphQueryResult<string>>>(() => Promise.resolve(withRootResult))
-  const readWithoutRoot = vi.fn<() => Promise<ChaingraphQueryResult<string>>>(() => Promise.resolve({ data: "from output" }))
+interface Rows { source: string }
+const fromRoot = { data: { source: "unspent_output" } }
+const fromGeneric = { data: { source: "output" } }
+
+// Reads that record which way the outputs were read. The unspent_output read answers like an instance
+// that has the nodes `instance.nodeNames`, or fails with `withRootError`.
+function fakeReads({ withRootError, instance }: { withRootError?: { message: string }, instance?: FakeInstance } = {}) {
+  const readWithRoot = vi.fn<(nodeName: string) => Promise<ChaingraphQueryResult<Rows & UnspentOutputNodeData>>>(nodeName => {
+    if (withRootError) return Promise.resolve({ error: withRootError })
+    const hasNode = !instance || instance.nodeNames.includes(nodeName)
+    return Promise.resolve({ data: { source: "unspent_output", unspent_output_node: hasNode ? [{ name: nodeName }] : [] } })
+  })
+  const readWithoutRoot = vi.fn<() => Promise<ChaingraphQueryResult<Rows>>>(() => Promise.resolve(fromGeneric))
   return { readWithRoot, readWithoutRoot }
 }
 
@@ -78,8 +89,8 @@ describe("readUnspentOutputs", () => {
     const { runQuery, requests } = fakeInstance({ hasRoot: true, nodeNames: ["bchn-mainnet"] })
     const reads = fakeReads()
 
-    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual({ data: "from unspent_output" })
-    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual({ data: "from unspent_output" })
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromRoot)
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromRoot)
 
     expect(reads.readWithRoot).toHaveBeenCalledWith("bchn-mainnet")
     expect(reads.readWithoutRoot).not.toHaveBeenCalled()
@@ -119,15 +130,58 @@ describe("readUnspentOutputs", () => {
     const { runQuery } = fakeInstance({ hasRoot: true, nodeNames: ["bchn-mainnet", "bchn-chipnet"] })
     const reads = fakeReads()
 
-    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual({ data: "from output" })
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromGeneric)
     expect(reads.readWithRoot).not.toHaveBeenCalled()
+  })
+
+  it("looks up the node again on the next query when no node accepted the transaction yet", async () => {
+    const instance: FakeInstance = { hasRoot: true, nodeNames: ["bchn-mainnet", "bchn-chipnet"] }
+    const { runQuery, requests } = fakeInstance(instance)
+    const reads = fakeReads({ instance })
+
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromGeneric)
+    instance.acceptedInMempoolBy = ["bchn-mainnet"]
+
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromRoot)
+    expect(reads.readWithRoot).toHaveBeenCalledWith("bchn-mainnet")
+    expect(requests).toEqual({ capabilityChecks: 1, nodeLookups: 2 })
+  })
+
+  it("looks up the node again after checking the instance again", async () => {
+    const instance: FakeInstance = { hasRoot: true, nodeNames: ["bchn-mainnet", "bchn-chipnet"], acceptedInBlockBy: ["bchn-mainnet"] }
+    const { runQuery, requests } = fakeInstance(instance)
+    const reads = fakeReads({ instance })
+
+    await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })
+    // Another instance, with other node names, now answers behind the same URL
+    Object.assign(instance, { nodeNames: ["mainnet", "chipnet"], acceptedInBlockBy: ["mainnet"] })
+    vi.setSystemTime(Date.now() + RECHECK_AFTER_MS + 1000)
+
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromRoot)
+    expect(reads.readWithRoot.mock.calls).toEqual([["bchn-mainnet"], ["mainnet"]])
+    expect(requests).toEqual({ capabilityChecks: 2, nodeLookups: 2 })
+  })
+
+  it("uses the generic query when the instance doesn't have the node, and checks again on the next query", async () => {
+    const instance: FakeInstance = { hasRoot: true, nodeNames: ["bchn-mainnet", "bchn-chipnet"], acceptedInBlockBy: ["bchn-mainnet"] }
+    const { runQuery, requests } = fakeInstance(instance)
+    const reads = fakeReads({ instance })
+
+    await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })
+    // Within the cache time, another instance with other node names takes over the URL
+    Object.assign(instance, { nodeNames: ["mainnet", "chipnet"], acceptedInBlockBy: ["mainnet"] })
+
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromGeneric)
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromRoot)
+    expect(reads.readWithRoot.mock.calls).toEqual([["bchn-mainnet"], ["bchn-mainnet"], ["mainnet"]])
+    expect(requests).toEqual({ capabilityChecks: 2, nodeLookups: 2 })
   })
 
   it("uses the generic query when the instance doesn't have unspent_output", async () => {
     const { runQuery, requests } = fakeInstance({ hasRoot: false, nodeNames: ["bchn-mainnet"] })
     const reads = fakeReads()
 
-    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual({ data: "from output" })
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromGeneric)
     expect(reads.readWithRoot).not.toHaveBeenCalled()
     expect(requests).toEqual({ capabilityChecks: 1, nodeLookups: 0 })
   })
@@ -135,10 +189,10 @@ describe("readUnspentOutputs", () => {
   it("switches to the generic query when unspent_output is rejected, and keeps using it", async () => {
     // The check said yes, then another instance without the root took over the endpoint
     const { runQuery, requests } = fakeInstance({ hasRoot: true, nodeNames: ["bchn-mainnet"] })
-    const reads = fakeReads({ error: missingRootError })
+    const reads = fakeReads({ withRootError: missingRootError })
 
-    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual({ data: "from output" })
-    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual({ data: "from output" })
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromGeneric)
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromGeneric)
 
     expect(reads.readWithRoot).toHaveBeenCalledTimes(1)
     expect(reads.readWithoutRoot).toHaveBeenCalledTimes(2)
@@ -148,7 +202,7 @@ describe("readUnspentOutputs", () => {
   it("passes on other errors of an unspent_output query without falling back", async () => {
     const { runQuery } = fakeInstance({ hasRoot: true, nodeNames: ["bchn-mainnet"] })
     const timeout = { message: "[GraphQL] canceling statement due to statement timeout" }
-    const reads = fakeReads({ error: timeout })
+    const reads = fakeReads({ withRootError: timeout })
 
     expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual({ error: timeout })
     expect(reads.readWithoutRoot).not.toHaveBeenCalled()
@@ -159,15 +213,15 @@ describe("readUnspentOutputs", () => {
     const { runQuery, requests } = fakeInstance(instance)
     const reads = fakeReads()
 
-    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual({ data: "from output" })
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromGeneric)
     instance.hasRoot = true
 
     vi.setSystemTime(Date.now() + RECHECK_AFTER_MS - 1000)
-    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual({ data: "from output" })
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromGeneric)
     expect(requests.capabilityChecks).toBe(1)
 
     vi.setSystemTime(Date.now() + 2000)
-    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual({ data: "from unspent_output" })
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromRoot)
     expect(requests.capabilityChecks).toBe(2)
   })
 
@@ -180,7 +234,7 @@ describe("readUnspentOutputs", () => {
     expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual({ error: { message: "[GraphQL] timeout" } })
     instance.hasRoot = true
 
-    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual({ data: "from unspent_output" })
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromRoot)
     expect(requests.capabilityChecks).toBe(2)
   })
 
@@ -189,10 +243,10 @@ describe("readUnspentOutputs", () => {
     const { runQuery, requests } = fakeInstance(instance)
     const reads = fakeReads()
 
-    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual({ data: "from output" })
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromGeneric)
     instance.checkFails = false
 
-    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual({ data: "from unspent_output" })
+    expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromRoot)
     expect(requests.capabilityChecks).toBe(2)
   })
 
@@ -202,8 +256,8 @@ describe("readUnspentOutputs", () => {
     const reads = fakeReads()
 
     expect(await readUnspentOutputs({ endpoint, tokenId, runQuery: withRoot.runQuery, ...reads }))
-      .toEqual({ data: "from unspent_output" })
+      .toEqual(fromRoot)
     expect(await readUnspentOutputs({ endpoint: "https://other.example/v1/graphql", tokenId, runQuery: withoutRoot.runQuery, ...reads }))
-      .toEqual({ data: "from output" })
+      .toEqual(fromGeneric)
   })
 })

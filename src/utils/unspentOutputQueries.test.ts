@@ -28,6 +28,8 @@ function mockChaingraph({ hasRoot }: { hasRoot: boolean }) {
       body = { data: { node: [{ name: "bchn-mainnet" }], __type: { fields: fields.map(name => ({ name })) } } }
     } else if (request.query.includes("unspent_output") && !hasRoot) {
       body = { errors: [{ extensions: { code: "validation-failed", path: "$.selectionSet.unspent_output" }, message: "field 'unspent_output' not found in type: 'query_root'" }] }
+    } else if (request.query.includes("unspent_output")) {
+      body = { data: { unspent_output_node: [{ name: request.variables.node }], output: [tokenOutput] } }
     } else {
       body = { data: { output: [tokenOutput] } }
     }
@@ -59,6 +61,7 @@ describe("unspent output queries", () => {
     expect(holders?.query).toContain("output: unspent_output(")
     expect(holders?.variables).toEqual({ tokenId: `\\x${tokenId}`, offset: 5000, node: "bchn-mainnet" })
     expect(issuing?.query).toContain("IssuingUtxosUnspent")
+    expect(issuing?.query).toContain("unspent_output_node: node(")
   })
 
   it("send the generic query when the instance doesn't have unspent_output", async () => {
