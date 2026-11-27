@@ -27,7 +27,7 @@
   Paging (readUnspentOutputs): a paged query is read as one scan, with one query version and one node.
   Pages are ordered by the creating transaction's `internal_id` (the order this instance stored
   transactions in), then `output_index`, and each page asks for the outputs after the last one read
-  (AFTER_OUTPUT). An output joining or leaving the set behind that position doesn't move the outputs
+  (outputsAfter). An output joining or leaving the set behind that position doesn't move the outputs
   still to be read, and a newly created output has a higher `internal_id`, so it comes after it.
   `internal_id` means something only on one instance, so every page also reads the instance's nodes, and
   a scan that sees them change, or has to switch to the generic version, starts again from the beginning.
