@@ -224,7 +224,7 @@ export default function App() {
     isCurrent: () => boolean
   ) {
     // Start holder query early so it runs in parallel, but await it in Phase 2
-    const holderDataPromise = queryAllTokenHolders(tokenId)
+    const holderDataPromise = queryAllTokenHolders(tokenId, isCurrent)
     // Phase 2 awaits this inside its try; the no-op handler only covers an early return in
     // Phase 1 (error or superseded search), which would otherwise leave a rejection unhandled
     holderDataPromise.catch(() => {})
@@ -452,28 +452,10 @@ export default function App() {
         return
       }
 
-      // Paginate queryAllTokenHolders (returns max 5000 per page)
-      let allTokenOutputs = respJsonAllTokenHolders.output
-      let lastBatchSize = allTokenOutputs.length
-      let indexOffset = 0
-
-      while (lastBatchSize === 5000) {
-        indexOffset += 1
-        console.time(`queryAllTokenHolders page ${indexOffset + 1}`)
-        const nextPage = await queryAllTokenHolders(tokenId, 5000 * indexOffset)
-        console.timeEnd(`queryAllTokenHolders page ${indexOffset + 1}`)
-        if (!isCurrent()) return
-        if (!nextPage) {
-          setExtendedTokenInfoError("Failed to load holder & supply data (pagination error)")
-          return
-        }
-        allTokenOutputs = allTokenOutputs.concat(nextPage.output)
-        lastBatchSize = nextPage.output.length
-      }
       // The query only drops bare OP_RETURN outputs; OP_RETURNs with data pushes and unswept
       // burner-contract outputs are burns too (counted in knownBurns), not holdings. Leaving
       // them out also keeps the burner address and unspendable outputs out of Electrum's check.
-      allTokenOutputs = allTokenOutputs.filter(o => !isKnownBurnLockingBytecode(o.locking_bytecode.slice(2)))
+      const allTokenOutputs = respJsonAllTokenHolders.output.filter(o => !isKnownBurnLockingBytecode(o.locking_bytecode.slice(2)))
 
       // Calculate totalSupplyNFTs
       const totalSupplyNFTs = allTokenOutputs.filter(o => o.nonfungible_token_capability !== null).length
