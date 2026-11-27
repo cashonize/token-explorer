@@ -22,7 +22,7 @@ interface FakeInstance {
 // A fake instance answering the capability check and the node lookup; counts each kind of request
 function fakeInstance(instance: FakeInstance) {
   const requests = { capabilityChecks: 0, nodeLookups: 0 }
-  const runQuery: ChaingraphQueryRunner = async <Data,>(document: string) => {
+  const answer = (document: string): ChaingraphQueryResult<unknown> => {
     if (document.includes("ChaingraphCapabilities")) {
       requests.capabilityChecks += 1
       if (instance.checkFails) return { error: { message: "[Network] Failed to fetch" } }
@@ -31,7 +31,7 @@ function fakeInstance(instance: FakeInstance) {
         data: {
           node: instance.nodeNames.map(name => ({ name })),
           __type: { fields: fields.map(name => ({ name })) },
-        } as Data,
+        },
       }
     }
     if (document.includes("NodesAcceptingTransaction")) {
@@ -44,18 +44,20 @@ function fakeInstance(instance: FakeInstance) {
               block: { accepted_by: (instance.acceptedInBlockBy ?? []).map(name => ({ node: { name } })) },
             }],
           }],
-        } as Data,
+        },
       }
     }
     throw new Error(`unexpected document: ${document}`)
   }
+  // The fake answers with the shape each document asks for; the runner's type can't know that
+  const runQuery = ((document: string) => Promise.resolve(answer(document))) as ChaingraphQueryRunner
   return { runQuery, requests }
 }
 
 // Reads that record which way the outputs were read
 function fakeReads(withRootResult: ChaingraphQueryResult<string> = { data: "from unspent_output" }) {
-  const readWithRoot = vi.fn(async (_nodeName: string) => withRootResult)
-  const readWithoutRoot = vi.fn(async (): Promise<ChaingraphQueryResult<string>> => ({ data: "from output" }))
+  const readWithRoot = vi.fn<(nodeName: string) => Promise<ChaingraphQueryResult<string>>>(() => Promise.resolve(withRootResult))
+  const readWithoutRoot = vi.fn<() => Promise<ChaingraphQueryResult<string>>>(() => Promise.resolve({ data: "from output" }))
   return { readWithRoot, readWithoutRoot }
 }
 

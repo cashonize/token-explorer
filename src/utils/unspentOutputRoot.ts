@@ -1,14 +1,15 @@
 /*
   Reading the unspent outputs of a token category.
 
-  Some Chaingraph instances (the ParyonUSD fork) have an `unspent_output(node_name)` query root. It
+  Instances running the ParyonUSD/chaingraph fork have an `unspent_output(node_name)` query root. It
   returns the outputs that the named node sees as unspent: created by a transaction the node accepts
   (in a block or in its mempool) and not spent by any transaction it accepts. Filtered on
   `token_category`, it answers in milliseconds where the generic `output` query with a
   `_not: { spent_by }` filter takes seconds, or times out for tokens with many outputs.
 
-  Other instances don't have the root, and the instance behind one URL can change (for example after
-  a DNS switch), so the explorer checks what the instance offers and falls back to the generic query:
+  Other instances don't have the root, and the instance behind one URL can change (the URL may be
+  moved to another instance), so the explorer checks what the instance offers and falls back to the
+  generic query:
   - The check (query root fields and node names, one request) is cached per endpoint URL and redone
     after RECHECK_AFTER_MS, so a switch to an instance with the root is picked up.
   - A query rejected because `unspent_output` doesn't exist marks the endpoint as without the root and

@@ -11,6 +11,12 @@ interface ChaingraphOutput {
   nonfungible_token_capability?: string | null
 }
 
+/**
+ * Cross-check Chaingraph's unspent token outputs against Electrum. `chaingraphOutputs` must
+ * already exclude known burns (OP_RETURN and burner-contract outputs, see utils/burns.ts):
+ * those are counted as burned, and an unswept burner output would otherwise come back from
+ * Electrum as a holding.
+ */
 export async function verifySupplyViaElectrum(
   chaingraphOutputs: ChaingraphOutput[],
   tokenId: string,
@@ -46,7 +52,7 @@ export async function verifySupplyViaElectrum(
   // Build Chaingraph UTXO map for matching + lookup
   const chaingraphUtxoByKey = new Map<string, ChaingraphOutput>()
   for (const output of chaingraphOutputs) {
-    const txHash = (output.transaction_hash as string).slice(2) // remove \x prefix
+    const txHash = output.transaction_hash.slice(2) // remove \x prefix
     const vout = output.output_index
     chaingraphUtxoByKey.set(`${txHash}:${vout}`, output)
   }
@@ -61,13 +67,15 @@ export async function verifySupplyViaElectrum(
   const uniqueAddresses = [...new Set(bytecodeToAddress.values())]
   console.log(`electrum: ${chaingraphOutputs.length} UTXOs across ${uniqueAddresses.length} unique addresses`)
 
-  console.time('electrum:connect')
-  const client = await initializeElectrumClient('Token Explorer', hostname, {
-    disableBrowserVisibilityHandling: true,
-  })
-  console.timeEnd('electrum:connect')
+  // network 4.x dropped disableBrowserVisibilityHandling: hiding the tab closes the socket, which fails in-flight requests
+  const client = await initializeElectrumClient('Token Explorer', hostname)
 
   try {
+    // connect once up front: otherwise every parallel request retries connect serially and disconnect() waits behind them
+    console.time('electrum:connect')
+    await client.connect()
+    console.timeEnd('electrum:connect')
+
     let totalElectrumUtxos = 0
     let electrumTotalFT = 0n
     let electrumReservedFT = 0n

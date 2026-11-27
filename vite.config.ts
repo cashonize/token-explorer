@@ -1,0 +1,23 @@
+/// <reference types="vitest/config" />
+import { fileURLToPath, URL } from 'node:url'
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
+  // NEXT_PUBLIC_ is kept so the existing NEXT_PUBLIC_CHAINGRAPH_URL setting (e.g. on Netlify) keeps working
+  envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
+  build: {
+    // Single-page app shipped as one chunk; libauth inlines its WASM binaries as base64 (~340 kB)
+    chunkSizeWarningLimit: 1000,
+  },
+  // Vitest (pnpm test) reads this config too
+  test: {
+    include: ['src/**/*.test.ts'],
+  },
+})

@@ -1,3 +1,5 @@
-allowBuilds:
-  sharp: true
-  unrs-resolver: true
+overrides:
+  # exact pins: network 4.3.0 was broken and reached consumers via a caret range
+  "@electrum-cash/network": "4.4.8"
+  "@electrum-cash/web-socket": "4.1.0"
+  "@electrum-cash/socket": "4.1.0"

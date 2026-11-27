@@ -1,105 +1,115 @@
-import Head from 'next/head'
 import styles from '@/styles/Home.module.css'
-import { BCMR } from '@mainnet-cash/bcmr'
-import { utf8ToBin, sha256, binToHex, hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth'
-import React, { useEffect, useRef, useState } from 'react'
-import { queryGenesisInfo, queryIssuingUtxos, queryAuthchain, queryAllTokenHolders, queryGenesisCategories } from '../utils/queryChainGraph'
-import { countUniqueHolders, calculateTotalSupplyFT } from '../utils/calculations'
-import { checkOtrVerified } from '../utils/otrRegistry'
-import { sanitizeTokenId } from '../utils/utils'
-import { IdentitySnapshotSchema } from '../utils/bcmrSchema'
-import type { TokenInfo, ExtendedTokenInfo, MetadataInfo, TokenMetadata, AuthchainEntry, Diagnostic, ReservedSupplyUtxo, ElectrumVerification } from '@/interfaces'
-import { CHAINGRAPH_URL, IPFS_GATEWAY, EXAMPLE_TOKENS } from '@/constants'
+import { hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
+import { queryGenesisInfo, queryIssuingUtxos, queryAuthchain, queryAllTokenHolders, queryGenesisCategories, queryKnownBurns, parseAuthchainMigrations, type AuthchainQueryResult } from '@/utils/queryChainGraph'
+import { aggregateBurns, isKnownBurnLockingBytecode } from '@/utils/burns'
+import { countUniqueHolders, calculateTotalSupplyFT } from '@/utils/calculations'
+import { checkOtrVerified } from '@/utils/otrRegistry'
+import { sanitizeTokenId, ipfsToGatewayUrl } from '@/utils/utils'
+import { isBcmrOutput, resolveRegistry, selectLatestPublication, type RegistryResolution } from '@/utils/bcmr'
+import type { TokenInfo, ExtendedTokenInfo, MetadataInfo, ReservedSupplyUtxo, ElectrumVerification, BurnEntry } from '@/interfaces'
+import { EXAMPLE_TOKENS } from '@/constants'
 import { verifySupplyViaElectrum } from '@/utils/queryElectrum'
 import { TokenSearch, MetadataDisplay, SupplyStats, AuthchainInfo, ThemeToggle } from '@/components'
 
-export default function Home() {
-  const [tokenId, setTokenId] = useState<string>("")
-  const [isLoadingTokenInfo, setIsLoadingTokenInfo] = useState<boolean>(false)
+const QUERY_TIMEOUT_MS = 20_000
+const withTimeout = <T,>(p: Promise<T>, label: string): Promise<T> =>
+  Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
+    )
+  ])
+
+// The tokenId in the URL the page was opened with (searched on mount)
+function readTokenIdFromUrl(): string {
+  return sanitizeTokenId(new URLSearchParams(window.location.search).get("tokenId") ?? "")
+}
+
+// Chaingraph reports 'none' for immutable NFTs; only minting/mutable outputs reserve supply
+function reservedCapability(capability: 'none' | 'mutable' | 'minting' | null | undefined): ReservedSupplyUtxo['nftCapability'] {
+  return capability === 'minting' || capability === 'mutable' ? capability : null
+}
+
+function readVerifyElectrumSetting(): boolean {
+  try {
+    return localStorage.getItem('verifyElectrum') === 'true'
+  } catch {
+    return false
+  }
+}
+
+export default function App() {
+  const [initialTokenId] = useState(readTokenIdFromUrl)
+  const [tokenId, setTokenId] = useState<string>(initialTokenId)
+  // Start in the loading state when opened with ?tokenId=, so the first render already shows the compact hero
+  const [isLoadingTokenInfo, setIsLoadingTokenInfo] = useState<boolean>(initialTokenId !== "")
   const [tokenInfo, setTokenInfo] = useState<TokenInfo>()
   const [extendedTokenInfo, setExtendedTokenInfo] = useState<ExtendedTokenInfo>()
   const [tokenInfoError, setTokenInfoError] = useState<string>()
   const [extendedTokenInfoError, setExtendedTokenInfoError] = useState<string>()
   const [metadataInfo, setMetadataInfo] = useState<MetadataInfo>()
-  const [tokenIconUri, setTokenIconUri] = useState<string>("")
   const [electrumVerification, setElectrumVerification] = useState<ElectrumVerification>()
-  const [verifyElectrum, setVerifyElectrum] = useState<boolean>(false)
+  const [verifyElectrum, setVerifyElectrum] = useState<boolean>(readVerifyElectrumSetting)
 
   // Mirrors verifyElectrum for async code (Phase 3 runs long after the closure was created)
-  const verifyElectrumRef = useRef(false)
+  const verifyElectrumRef = useRef(verifyElectrum)
   // Phase-3 arguments, kept so enabling the toggle mid-view can still verify the loaded token
   const electrumArgsRef = useRef<Parameters<typeof verifySupplyViaElectrum> | null>(null)
-  const electrumInFlightRef = useRef(false)
+  // Search generation of the Electrum run in flight (null when idle), so a run for an
+  // older search neither blocks nor overwrites verification of the current token
+  const electrumInFlightRef = useRef<number | null>(null)
+  // Incremented on every new search and on reset; async work from an older search
+  // compares against it and drops its results instead of overwriting the current view
+  const searchGenerationRef = useRef(0)
 
+  const searchInitialToken = useEffectEvent(() => {
+    if (initialTokenId) searchToken(initialTokenId)
+  })
   useEffect(() => {
-    const stored = localStorage.getItem('verifyElectrum') === 'true'
-    setVerifyElectrum(stored)
-    verifyElectrumRef.current = stored
+    searchInitialToken()
   }, [])
-
-  useEffect(() => {
-    const url = new URL(window.location.href)
-    const params = new URLSearchParams(url.search)
-    const readTokenId = sanitizeTokenId(params.get("tokenId") ?? "")
-    // The pre-paint script (see _document) sets data-has-token so the hero renders
-    // compact before first paint; React now owns the UI, so clear it.
-    document.documentElement.removeAttribute("data-has-token")
-    if (!readTokenId) return
-    searchToken(readTokenId)
-  }, [])
-
-  useEffect(() => {
-    const imageOrIconUri = metadataInfo?.tokenMetadata?.uris?.image ?? metadataInfo?.tokenMetadata?.uris?.icon
-    if (imageOrIconUri) {
-      if (!imageOrIconUri.startsWith('ipfs://')) {
-        setTokenIconUri(imageOrIconUri)
-      } else {
-        const path = imageOrIconUri.replace('ipfs://', '')
-        setTokenIconUri(IPFS_GATEWAY + path)
-      }
-    }
-  }, [metadataInfo])
-
-  useEffect(() => {
-    if (tokenInfo) {
-      setIsLoadingTokenInfo(false)
-    }
-  }, [tokenInfo])
 
   // Resolves when metadata has been set, so lookUpTokenData can wait briefly for it
   const metadataReadyRef = useRef<{ resolve: () => void } | null>(null)
 
   function searchToken(rawId: string) {
     const id = sanitizeTokenId(rawId)
+    const generation = ++searchGenerationRef.current
+    const isCurrent = () => searchGenerationRef.current === generation
     setTokenId(id)
     setTokenInfo(undefined)
     setTokenInfoError(undefined)
     setExtendedTokenInfo(undefined)
     setExtendedTokenInfoError(undefined)
     setMetadataInfo(undefined)
-    setTokenIconUri("")
     setElectrumVerification(undefined)
     electrumArgsRef.current = null
     setIsLoadingTokenInfo(true)
     const metadataReadyPromise = new Promise<void>(resolve => {
       metadataReadyRef.current = { resolve }
     })
-    lookUpTokenData(id, metadataReadyPromise)
-    fetchMetadata(id)
-    checkOtrStatus(id)
+    // One authchain query feeds both the token info and the BCMR metadata resolution
+    const authchainPromise = withTimeout(queryAuthchain(id), 'queryAuthchain')
+    // Fire-and-forget: none of these three reject. Each catches its own query errors
+    // (lookUpTokenData / fetchMetadata in try/catch, checkOtrVerified inside fetchOtrRegistry)
+    // and reports them through state.
+    void lookUpTokenData(id, authchainPromise, metadataReadyPromise, isCurrent)
+    void fetchMetadata(id, authchainPromise, isCurrent)
+    void checkOtrStatus(id, isCurrent)
     const params = new URLSearchParams(window.location.search)
     params.set("tokenId", id)
     window.history.replaceState({}, "", `${location.pathname}?${params}`)
   }
 
   function resetToHome() {
+    searchGenerationRef.current++
     setTokenId("")
     setTokenInfo(undefined)
     setTokenInfoError(undefined)
     setExtendedTokenInfo(undefined)
     setExtendedTokenInfoError(undefined)
     setMetadataInfo(undefined)
-    setTokenIconUri("")
     setElectrumVerification(undefined)
     electrumArgsRef.current = null
     setIsLoadingTokenInfo(false)
@@ -108,15 +118,18 @@ export default function Home() {
 
   function runElectrumVerification() {
     const args = electrumArgsRef.current
-    if (!args || electrumInFlightRef.current) return
-    electrumInFlightRef.current = true
+    // electrumArgsRef only ever holds the current search's arguments
+    const generation = searchGenerationRef.current
+    if (!args || electrumInFlightRef.current === generation) return
+    electrumInFlightRef.current = generation
+    const isCurrent = () => searchGenerationRef.current === generation
     verifySupplyViaElectrum(...args).then(
       result => {
-        if (verifyElectrumRef.current) setElectrumVerification(result)
+        if (isCurrent() && verifyElectrumRef.current) setElectrumVerification(result)
       },
       error => {
         console.error("Electrum verification failed:", error)
-        if (!verifyElectrumRef.current) return
+        if (!isCurrent() || !verifyElectrumRef.current) return
         setElectrumVerification({
           verified: false,
           totalChaingraphUtxos: args[0].length,
@@ -129,13 +142,19 @@ export default function Home() {
           error: error instanceof Error ? error.message : String(error),
         })
       }
-    ).finally(() => { electrumInFlightRef.current = false })
+    ).finally(() => {
+      if (electrumInFlightRef.current === generation) electrumInFlightRef.current = null
+    })
   }
 
   function toggleVerifyElectrum(enabled: boolean) {
     setVerifyElectrum(enabled)
     verifyElectrumRef.current = enabled
-    localStorage.setItem('verifyElectrum', String(enabled))
+    try {
+      localStorage.setItem('verifyElectrum', String(enabled))
+    } catch {
+      // localStorage unavailable: the setting applies to this page view only
+    }
     if (enabled) {
       if (!electrumVerification) runElectrumVerification()
     } else {
@@ -143,203 +162,99 @@ export default function Home() {
     }
   }
 
-  async function checkOtrStatus(tokenId: string) {
+  async function checkOtrStatus(tokenId: string, isCurrent: () => boolean) {
     const isOtrVerified = await checkOtrVerified(tokenId)
+    if (!isCurrent()) return
     setMetadataInfo(prev => prev ? { ...prev, isOtrVerified } : { isOtrVerified })
   }
 
-  async function fetchMetadata(tokenId: string) {
-    let tokenMetadataResult: TokenMetadata | undefined
+  async function fetchMetadata(tokenId: string, authchainPromise: Promise<AuthchainQueryResult>, isCurrent: () => boolean) {
     let metaDataLocation = ""
     let httpsUrl: string | undefined
     let authchainUpdates = 0
-    let metadataHashMatch: boolean | undefined = undefined
-    let isSchemaValid: boolean | undefined = undefined
-    let authchainHistory: AuthchainEntry[] | undefined = undefined
-    const diagnostics: Diagnostic[] = []
+    let resolution: RegistryResolution = { diagnostics: [] }
 
     try {
-      const authChain = await BCMR.fetchAuthChainFromChaingraph({
-        chaingraphUrl: CHAINGRAPH_URL,
-        transactionHash: tokenId
-      })
-      console.log(authChain)
-
-      const latestAuthChainEntry = authChain.at(-1)
-      if (latestAuthChainEntry) {
-        authchainUpdates = authChain.length
-
-        // Store BCMR authchain entries for enrichment in the component
-        authchainHistory = authChain.map(entry => ({
-          txHash: entry.txHash,
-          isMetadataUpdate: true,
-          contentHash: entry.contentHash,
-          httpsUrl: entry.httpsUrl,
-          uris: entry.uris
-        }))
-
-        const bcmrLocation = latestAuthChainEntry.uris[0]
-        httpsUrl = latestAuthChainEntry.httpsUrl
-        if (!bcmrLocation || !httpsUrl) return
-
-        const providedHash = latestAuthChainEntry.contentHash
-        if (bcmrLocation.startsWith("ipfs://")) {
-          httpsUrl = bcmrLocation.replace("ipfs://", IPFS_GATEWAY)
-        }
-        metaDataLocation = bcmrLocation
-
-        // Step A: Import metadata registry from URL
-        const isIpfs = bcmrLocation.startsWith('ipfs://') || httpsUrl.includes('/ipfs/')
-        let importSucceeded = false
-        try {
-          console.log("Importing an on-chain resolved BCMR!")
-          await BCMR.addMetadataRegistryFromUri(httpsUrl)
-          importSucceeded = true
-        } catch (e) {
-          console.log(e)
-          if (e instanceof TypeError && (e.message.includes('Failed to fetch') || e.message.includes('fetch'))) {
-            diagnostics.push({
-              type: 'fetch_failed',
-              message: isIpfs
-                ? 'Unable to fetch metadata from IPFS gateway. The gateway may be down, slow, or the content may not be pinned.'
-                : 'Unable to fetch metadata from URL. This is likely a CORS issue — the server needs to include an Access-Control-Allow-Origin header.',
-              details: `URL: ${httpsUrl}\nError: ${e.message}`
-            })
-          } else if (e instanceof SyntaxError) {
-            diagnostics.push({
-              type: 'invalid_json',
-              message: isIpfs
-                ? 'IPFS gateway returned non-JSON content. The gateway may be returning an error page or the pinned content is not valid JSON.'
-                : 'Server returned non-JSON content. The URL may be serving an HTML error page or Cloudflare challenge.',
-              details: `URL: ${httpsUrl}\nError: ${e.message}`
-            })
-          } else {
-            diagnostics.push({
-              type: 'fetch_failed',
-              message: `Failed to import metadata registry: ${e instanceof Error ? e.message : String(e)}`,
-              details: `URL: ${httpsUrl}`
-            })
-          }
-        }
-
-        if (importSucceeded) {
-          // Step B: Schema validation
-          const tokenMetadata = BCMR.getTokenInfo(tokenId)
-          if (!tokenMetadata || typeof tokenMetadata !== 'object') {
-            // Registry was fetched but doesn't contain an entry for this tokenId
-            // This typically means the txid is not a token category
-            console.log('No metadata entry found for this tokenId in the resolved registry')
-          } else {
-            const validationResult = IdentitySnapshotSchema.safeParse(tokenMetadata)
-            if (validationResult.success) {
-              tokenMetadataResult = tokenMetadata as TokenMetadata
-              isSchemaValid = true
-            } else {
-              console.error('Token metadata schema validation failed:', validationResult.error.issues)
-              tokenMetadataResult = tokenMetadata as TokenMetadata
-              isSchemaValid = false
-              const issueMessages = validationResult.error.issues.map(
-                issue => `${issue.path.join('.')}: ${issue.message}`
-              ).join('\n')
-              diagnostics.push({
-                type: 'schema_invalid',
-                message: 'Token metadata does not fully conform to the BCMR schema.',
-                details: issueMessages
-              })
-            }
-          }
-
-          // Step C: Hash verification
-          try {
-            const response = await fetch(httpsUrl)
-            if (!response.ok) {
-              metadataHashMatch = false
-              diagnostics.push({
-                type: 'http_error',
-                message: `HTTP ${response.status} when fetching metadata for hash verification.`,
-                details: `URL: ${httpsUrl}\nStatus: ${response.status} ${response.statusText}`
-              })
-            } else {
-              const bcmrContent = await response.text()
-              const contentHash = binToHex(sha256.hash(utf8ToBin(bcmrContent)))
-              metadataHashMatch = contentHash === providedHash
-              if (!metadataHashMatch) {
-                diagnostics.push({
-                  type: 'hash_mismatch',
-                  message: 'On-chain content hash does not match the fetched metadata content.',
-                  details: `expected: ${providedHash}\nactual: ${contentHash}`
-                })
-              }
-            }
-          } catch (e) {
-            console.log(e)
-            if (e instanceof TypeError && (e.message.includes('Failed to fetch') || e.message.includes('fetch'))) {
-              diagnostics.push({
-                type: 'fetch_failed',
-                message: isIpfs
-                  ? 'Unable to re-fetch metadata from IPFS gateway for hash verification.'
-                  : 'Unable to re-fetch metadata for hash verification (likely CORS).',
-                details: `URL: ${httpsUrl}\nError: ${(e as Error).message}`
-              })
-            } else {
-              diagnostics.push({
-                type: 'fetch_failed',
-                message: `Hash verification fetch failed: ${e instanceof Error ? e.message : String(e)}`,
-                details: `URL: ${httpsUrl}`
-              })
-            }
-          }
-        }
+      const migrations = parseAuthchainMigrations(await authchainPromise)
+      const { metadataUpdates, publication, diagnostic } = selectLatestPublication(migrations, tokenId)
+      authchainUpdates = metadataUpdates
+      if (publication) {
+        httpsUrl = publication.httpsUrl
+        metaDataLocation = publication.resolvedUri
+        resolution = await resolveRegistry(publication, tokenId)
+      } else if (diagnostic) {
+        resolution.diagnostics.push(diagnostic)
       }
     } catch (error) {
       console.log(error)
     }
 
+    // A newer search has replaced metadataReadyRef too, so don't resolve it either
+    if (!isCurrent()) return
+    const { tokenMetadata, metadataHashMatch, isSchemaValid, diagnostics } = resolution
     setMetadataInfo(prev => ({
       ...prev,
       metaDataLocation,
-      tokenMetadata: tokenMetadataResult,
+      tokenMetadata,
       httpsUrl,
       authchainUpdates,
       metadataHashMatch,
       isSchemaValid,
-      authchainHistory,
       diagnostics: diagnostics.length > 0 ? diagnostics : undefined
     }))
     metadataReadyRef.current?.resolve()
   }
 
-  async function lookUpTokenData(tokenId: string, metadataReady: Promise<void>) {
+  async function applyKnownBurns(burnsPromise: Promise<BurnEntry[]>, isCurrent: () => boolean) {
+    let burns: Pick<TokenInfo, 'knownBurns' | 'burnsError'>
+    try {
+      burns = { knownBurns: aggregateBurns(await burnsPromise) }
+    } catch (error) {
+      console.error("Error fetching known burns from Chaingraph:", error)
+      burns = { burnsError: "Failed to load burned tokens from Chaingraph" }
+    }
+    if (!isCurrent()) return
+    setTokenInfo(prev => prev && { ...prev, ...burns })
+  }
+
+  async function lookUpTokenData(
+    tokenId: string,
+    authchainPromise: Promise<AuthchainQueryResult>,
+    metadataReady: Promise<void>,
+    isCurrent: () => boolean
+  ) {
     // Start holder query early so it runs in parallel, but await it in Phase 2
     const holderDataPromise = queryAllTokenHolders(tokenId)
+    // Phase 2 awaits this inside its try; the no-op handler only covers an early return in
+    // Phase 1 (error or superseded search), which would otherwise leave a rejection unhandled
+    holderDataPromise.catch(() => {})
+    // Known burns are merged into tokenInfo once Phase 1 has set it (applyKnownBurns), so a
+    // slow burn query (seconds for tokens with thousands of OP_RETURN burns) doesn't hold up
+    // Phase 1. Same no-op handler for an early return.
+    const burnsPromise = withTimeout(queryKnownBurns(tokenId), 'queryKnownBurns')
+    burnsPromise.catch(() => {})
     let network: 'mainnet' | 'chipnet' = 'mainnet'
     let authHead = ''
     let authHeadVout = 0
     let authHeadAddress: string | undefined
     let authHeadBurned = false
+    // Outpoints ("txHash:vout") counted as reserved supply, left out of the user/contract split in Phase 2
+    let reservedOutpoints = new Set<string>()
 
     try {
       // Start all queries in parallel, but don't block on the slow holder query
       console.time('initialDataLoad')
 
-      const QUERY_TIMEOUT_MS = 20_000
-      const withTimeout = <T,>(p: Promise<T>, label: string): Promise<T> =>
-        Promise.race([
-          p,
-          new Promise<T>((_, reject) =>
-            setTimeout(() => reject(new Error(`${label} timed out after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
-          )
-        ])
-
       const [genesisResult, issuingResult, authchainResult] = await Promise.allSettled([
         withTimeout(queryGenesisInfo(tokenId), 'queryGenesisInfo'),
         withTimeout(queryIssuingUtxos(tokenId), 'queryIssuingUtxos'),
-        withTimeout(queryAuthchain(tokenId), 'queryAuthchain')
+        authchainPromise
       ])
 
+      if (!isCurrent()) return
       const respJsonAuthchain = authchainResult.status === 'fulfilled' ? authchainResult.value : null
       if (!respJsonAuthchain) {
-        const reason = authchainResult.status === 'rejected' ? authchainResult.reason : 'query returned null'
+        const reason: unknown = authchainResult.status === 'rejected' ? authchainResult.reason : 'query returned null'
         console.error("Error fetching authchain from Chaingraph:", reason)
         setTokenInfoError("Failed to load core token data from Chaingraph")
         setIsLoadingTokenInfo(false)
@@ -381,13 +296,14 @@ export default function Home() {
       }
 
       // Parse reserved supply UTXOs (minting + mutable NFT UTXOs) — only if the query succeeded
+      // A minting/mutable NFT on an OP_RETURN or the burner contract is burned, not reserved
       const reservedSupplyUtxos: ReservedSupplyUtxo[] = respJsonIssuingUtxos
-        ? respJsonIssuingUtxos.output.map(o => ({
-            txHash: (o.transaction_hash as string).slice(2),
+        ? respJsonIssuingUtxos.output.filter(o => !isKnownBurnLockingBytecode(o.locking_bytecode.slice(2))).map(o => ({
+            txHash: o.transaction_hash.slice(2),
             vout: Number(o.output_index),
-            lockingBytecode: (o.locking_bytecode as string).slice(2),
+            lockingBytecode: o.locking_bytecode.slice(2),
             fungibleTokenAmount: BigInt(o.fungible_token_amount ?? "0"),
-            nftCapability: o.nonfungible_token_capability as 'minting' | 'mutable'
+            nftCapability: reservedCapability(o.nonfungible_token_capability)
           }))
         : []
       const hasActiveMintingToken = reservedSupplyUtxos.some(utxo => utxo.nftCapability === "minting")
@@ -404,7 +320,7 @@ export default function Home() {
       authHead = authheadData?.hash?.slice(2) ?? ''
 
       const authheadReservedFT = BigInt(identityOutput?.fungible_token_amount ?? 0)
-      const authHeadLockingBytecode = identityOutput?.locking_bytecode as string | undefined
+      const authHeadLockingBytecode = identityOutput?.locking_bytecode
 
       // Check if the authhead's identity output (output 0) is an OP_RETURN.
       // If so, the authchain is burned — it can never be extended since OP_RETURN is unspendable.
@@ -414,11 +330,8 @@ export default function Home() {
       // Parse authhead timestamp and check if it's a metadata update
       const authHeadBlockTimestamp = authheadData?.block_inclusions?.[0]?.block?.timestamp
       const authHeadTimestamp = authHeadBlockTimestamp ? Number(authHeadBlockTimestamp) : undefined
-      const authHeadOutputs = authheadData?.outputs as Array<{ output_index: number, locking_bytecode: string }> | undefined
-      // BCMR OP_RETURN prefix: 6a (OP_RETURN) + 04 (OP_PUSH4) + 42434d52 ("BCMR")
-      const BCMR_OP_RETURN_PREFIX = '6a0442434d52'
-      const authHeadIsMetadataUpdate = authHeadOutputs?.some(
-        output => output.locking_bytecode?.slice(2).toLowerCase().startsWith(BCMR_OP_RETURN_PREFIX)
+      const authHeadIsMetadataUpdate = authheadData?.outputs.some(
+        output => isBcmrOutput(output.locking_bytecode.slice(2))
       ) ?? false
 
       let usesAuthGuard = false
@@ -432,21 +345,7 @@ export default function Home() {
         authHeadAddress = typeof authHeadAddressResult === 'string' ? undefined : authHeadAddressResult.address
       }
 
-      // Parse authchain migrations into AuthchainEntry[]
-      const migrations = authchainData?.migrations
-
-      const authchainMigrations: AuthchainEntry[] = (migrations ?? []).map(m => {
-        const tx = Array.isArray(m.transaction) ? m.transaction[0] : m.transaction
-        const txHash = (tx?.hash ?? '').slice(2)
-        const blockTimestamp = tx?.block_inclusions?.[0]?.block?.timestamp
-        const timestamp = blockTimestamp ? Number(blockTimestamp) : undefined
-        const bcmrOutput = tx?.outputs?.find(
-          output => output.locking_bytecode?.slice(2).toLowerCase().startsWith(BCMR_OP_RETURN_PREFIX)
-        )
-        const isMetadataUpdate = !!bcmrOutput
-        const opReturnHex = bcmrOutput ? bcmrOutput.locking_bytecode?.slice(2) : undefined
-        return { txHash, timestamp, isMetadataUpdate, opReturnHex }
-      })
+      const authchainMigrations = parseAuthchainMigrations(respJsonAuthchain)
       // Remove pre-genesis migrations (Chaingraph includes the funding tx)
       const genesisIndex = authchainMigrations.findIndex(m => m.txHash === genesisTx)
       const filteredMigrations = genesisIndex >= 0 ? authchainMigrations.slice(genesisIndex) : authchainMigrations
@@ -482,6 +381,7 @@ export default function Home() {
         metadataReady,
         new Promise(resolve => setTimeout(resolve, 200))
       ])
+      if (!isCurrent()) return
 
       // Add authhead identity output to reserved supply UTXOs if it holds FT
       authHeadVout = Number(identityOutput?.output_index ?? 0)
@@ -492,18 +392,20 @@ export default function Home() {
         // Mark the existing entry as authhead
         const existing = reservedSupplyUtxos.find(utxo => utxo.txHash === authHead && utxo.vout === authHeadVout)
         if (existing) existing.isAuthhead = true
-      } else if (authheadReservedFT > 0n && authHeadLockingBytecode) {
+      } else if (authheadReservedFT > 0n && authHeadLockingBytecode && !isKnownBurnLockingBytecode(authHeadLockingBytecode.slice(2))) {
         reservedSupplyUtxos.push({
           txHash: authHead,
           vout: authHeadVout,
           lockingBytecode: authHeadLockingBytecode.slice(2),
           fungibleTokenAmount: authheadReservedFT,
-          nftCapability: identityOutput?.nonfungible_token_capability as 'minting' | 'mutable' | null ?? null,
+          nftCapability: reservedCapability(identityOutput?.nonfungible_token_capability),
           isAuthhead: true
         })
       }
 
-      const reservedSupplyFT = covenantReservedFT + (authHeadAlreadyIncluded ? 0n : authheadReservedFT)
+      reservedOutpoints = new Set(reservedSupplyUtxos.map(u => `${u.txHash}:${u.vout}`))
+      const authheadAdded = !authHeadAlreadyIncluded && reservedSupplyUtxos.some(u => u.isAuthhead)
+      const reservedSupplyFT = covenantReservedFT + (authheadAdded ? authheadReservedFT : 0n)
 
       setTokenInfo({
         validTxId,
@@ -528,8 +430,12 @@ export default function Home() {
         genesisInfoError,
         issuingUtxosError
       })
+      setIsLoadingTokenInfo(false)
+      // Fire-and-forget: applyKnownBurns catches the query error and reports it through state
+      void applyKnownBurns(burnsPromise, isCurrent)
     } catch (error) {
       console.error("Error in initial data load:", error)
+      if (!isCurrent()) return
       setTokenInfoError("Failed to load token data from Chaingraph")
       setIsLoadingTokenInfo(false)
       return
@@ -540,6 +446,7 @@ export default function Home() {
       console.time('queryAllTokenHolders')
       const respJsonAllTokenHolders = await holderDataPromise
       console.timeEnd('queryAllTokenHolders')
+      if (!isCurrent()) return
       if (!respJsonAllTokenHolders) {
         setExtendedTokenInfoError("Failed to load holder & supply data")
         return
@@ -555,6 +462,7 @@ export default function Home() {
         console.time(`queryAllTokenHolders page ${indexOffset + 1}`)
         const nextPage = await queryAllTokenHolders(tokenId, 5000 * indexOffset)
         console.timeEnd(`queryAllTokenHolders page ${indexOffset + 1}`)
+        if (!isCurrent()) return
         if (!nextPage) {
           setExtendedTokenInfoError("Failed to load holder & supply data (pagination error)")
           return
@@ -562,17 +470,19 @@ export default function Home() {
         allTokenOutputs = allTokenOutputs.concat(nextPage.output)
         lastBatchSize = nextPage.output.length
       }
+      // The query only drops bare OP_RETURN outputs; OP_RETURNs with data pushes and unswept
+      // burner-contract outputs are burns too (counted in knownBurns), not holdings. Leaving
+      // them out also keeps the burner address and unspendable outputs out of Electrum's check.
+      allTokenOutputs = allTokenOutputs.filter(o => !isKnownBurnLockingBytecode(o.locking_bytecode.slice(2)))
 
       // Calculate totalSupplyNFTs
-      const totalSupplyNFTs = allTokenOutputs.filter(
-        (o: { nonfungible_token_capability: string | null }) => o.nonfungible_token_capability !== null
-      ).length
+      const totalSupplyNFTs = allTokenOutputs.filter(o => o.nonfungible_token_capability !== null).length
 
       // Calculate supply stats
       const totalSupplyFT = calculateTotalSupplyFT(allTokenOutputs)
 
       // Calculate holder stats
-      const { numberHolders, numberTokenAddresses, userSupplyFT, contractSupplyFT } = countUniqueHolders(allTokenOutputs)
+      const { numberHolders, numberTokenAddresses, userSupplyFT, contractSupplyFT } = countUniqueHolders(allTokenOutputs, reservedOutpoints)
 
       // Set extended token info (supply & holder data)
       setExtendedTokenInfo({
@@ -591,6 +501,7 @@ export default function Home() {
       if (verifyElectrumRef.current) runElectrumVerification()
     } catch (error) {
       console.error("Error in queryAllTokenHolders:", error)
+      if (!isCurrent()) return
       setExtendedTokenInfoError("Failed to load holder & supply data")
     }
   }
@@ -603,21 +514,17 @@ export default function Home() {
     return 'CashToken'
   }
 
+  const imageOrIconUri = metadataInfo?.tokenMetadata?.uris?.image ?? metadataInfo?.tokenMetadata?.uris?.icon
+  const tokenIconUri = imageOrIconUri ? ipfsToGatewayUrl(imageOrIconUri) : ""
+
   const showResults = tokenInfo && tokenInfo.validTokenCategory
   const compact = !!tokenInfo || isLoadingTokenInfo
 
   return (
     <>
-      <Head>
-        <title>CashToken Explorer</title>
-        <meta name="description" content="Explore CashTokens metadata, supply, holders and authchain on Bitcoin Cash" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-        <link rel="icon" href="/favicon.ico" sizes="any" />
-      </Head>
       <main className={styles.page}>
         <ThemeToggle />
-        <header className={`${styles.hero} app-hero ${compact ? styles.heroCompact : ''}`}>
+        <header className={`${styles.hero} ${compact ? styles.heroCompact : ''}`}>
           <button
             type="button"
             className={styles.brand}
@@ -625,10 +532,10 @@ export default function Home() {
             aria-label="Back to home"
           >
             <span className={styles.brandMark}>₿</span>
-            <h1 className={`${styles.title} app-title ${compact ? styles.titleCompact : ''}`}>CashToken Explorer</h1>
+            <h1 className={`${styles.title} ${compact ? styles.titleCompact : ''}`}>CashToken Explorer</h1>
           </button>
           {!compact && (
-            <p className={`${styles.subtitle} app-landing-only`}>
+            <p className={styles.subtitle}>
               Explore CashTokens metadata, supply, holders and authchain on Bitcoin Cash.
             </p>
           )}
@@ -641,10 +548,10 @@ export default function Home() {
           />
           {!compact && (
             <>
-              <div className={`${styles.searchHint} app-landing-only`}>
+              <div className={styles.searchHint}>
                 Paste a Token ID (Category ID) to look it up — or try an example below.
               </div>
-              <div className={`${styles.examples} app-landing-only`}>
+              <div className={styles.examples}>
                 <div className={styles.examplesLabel}>Example tokens</div>
                 <div className={styles.exampleList}>
                   {EXAMPLE_TOKENS.map(example => (

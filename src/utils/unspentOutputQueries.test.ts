@@ -19,7 +19,7 @@ interface GraphqlRequest {
 // Stands in for a Chaingraph instance over HTTP; `hasRoot` decides how it answers
 function mockChaingraph({ hasRoot }: { hasRoot: boolean }) {
   const requests: GraphqlRequest[] = []
-  vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
+  vi.stubGlobal("fetch", vi.fn((_url: string, init: RequestInit) => {
     const request = JSON.parse(init.body as string) as GraphqlRequest
     requests.push(request)
     let body: unknown
@@ -31,7 +31,7 @@ function mockChaingraph({ hasRoot }: { hasRoot: boolean }) {
     } else {
       body = { data: { output: [tokenOutput] } }
     }
-    return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } })
+    return Promise.resolve(new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } }))
   }))
   return requests
 }
@@ -53,10 +53,12 @@ describe("unspent output queries", () => {
     expect(await queryAllTokenHolders(tokenId, 5000)).toEqual({ output: [tokenOutput] })
     expect(await queryIssuingUtxos(tokenId)).toEqual({ output: [tokenOutput] })
 
+    const [check, holders, issuing] = requests
     expect(requests).toHaveLength(3)
-    expect(requests[1].query).toContain("output: unspent_output(")
-    expect(requests[1].variables).toEqual({ tokenId: `\\x${tokenId}`, offset: 5000, node: "bchn-mainnet" })
-    expect(requests[2].query).toContain("IssuingUtxosUnspent")
+    expect(check?.query).toContain("query ChaingraphCapabilities")
+    expect(holders?.query).toContain("output: unspent_output(")
+    expect(holders?.variables).toEqual({ tokenId: `\\x${tokenId}`, offset: 5000, node: "bchn-mainnet" })
+    expect(issuing?.query).toContain("IssuingUtxosUnspent")
   })
 
   it("send the generic query when the instance doesn't have unspent_output", async () => {
@@ -64,9 +66,10 @@ describe("unspent output queries", () => {
 
     expect(await queryAllTokenHolders(tokenId)).toEqual({ output: [tokenOutput] })
 
+    const [, holders] = requests
     expect(requests).toHaveLength(2)
-    expect(requests[1].query).toContain("spent_by")
-    expect(requests[1].query).not.toContain("unspent_output")
+    expect(holders?.query).toContain("spent_by")
+    expect(holders?.query).not.toContain("unspent_output")
   })
 
   it("rerun with the generic query when Hasura rejects unspent_output", async () => {
