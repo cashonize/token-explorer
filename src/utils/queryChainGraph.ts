@@ -1,7 +1,68 @@
 import { graphql, ChaingraphClient } from "chaingraph-ts";
 import { CHAINGRAPH_URL } from "@/constants";
+import { readUnspentOutputs, type ChaingraphQueryRunner } from "./unspentOutputRoot";
 
 const chaingraphClient = new ChaingraphClient(CHAINGRAPH_URL);
+
+const runQuery: ChaingraphQueryRunner = async (document, variables) =>
+  await chaingraphClient.query(document, variables)
+
+// Result shape shared by the generic `output` queries and their `unspent_output` versions below
+export interface UnspentTokenOutput {
+  transaction_hash: string
+  output_index: string
+  locking_bytecode: string
+  fungible_token_amount: string | null
+  nonfungible_token_capability: "none" | "mutable" | "minting" | null
+}
+
+interface UnspentTokenOutputs {
+  output: UnspentTokenOutput[]
+}
+
+// The `unspent_output` versions are plain strings: the chaingraph-ts schema types don't include that root.
+// Aliasing it as `output` keeps the result shape of the generic queries.
+const queryTotalSupplyFromUnspentOutputs = `query TotalSupplyFTUnspent (
+  $offset: Int,
+  $tokenId: bytea,
+  $node: String!
+) {
+    output: unspent_output(
+      args: { node_name: $node }
+      offset: $offset
+      limit: 5000
+      where: {
+        token_category: { _eq: $tokenId }
+        locking_bytecode_pattern: { _neq: "6a" }
+      }
+    ) {
+      transaction_hash
+      output_index
+      locking_bytecode
+      fungible_token_amount
+      nonfungible_token_capability
+    }
+  }`
+
+const queryIssuingUtxosFromUnspentOutputs = `query IssuingUtxosUnspent (
+  $tokenId: bytea,
+  $node: String!
+) {
+    output: unspent_output(
+      args: { node_name: $node }
+      where: {
+        token_category: { _eq: $tokenId }
+        nonfungible_token_capability: { _in: ["minting", "mutable"] }
+        locking_bytecode_pattern: { _neq: "6a" }
+      }
+    ) {
+      transaction_hash
+      output_index
+      locking_bytecode
+      fungible_token_amount
+      nonfungible_token_capability
+    }
+  }`
 
 export async function queryGenesisInfo(tokenId:string){
   const queryReqGenesisSupply = graphql(`query GenesisSupplyFT (
@@ -63,7 +124,14 @@ export async function queryAllTokenHolders(tokenId:string, offset:number = 0){
       }
     }`);
   const variables = { tokenId: `\\x${tokenId}`, offset }
-  return (await chaingraphClient.query(queryReqTotalSupply, variables)).data
+  const result = await readUnspentOutputs<UnspentTokenOutputs>({
+    endpoint: CHAINGRAPH_URL,
+    tokenId,
+    runQuery,
+    readWithRoot: (node) => runQuery(queryTotalSupplyFromUnspentOutputs, { ...variables, node }),
+    readWithoutRoot: async () => await chaingraphClient.query(queryReqTotalSupply, variables),
+  })
+  return result.data
 }
 
 export async function queryIssuingUtxos(tokenId:string){
@@ -95,7 +163,14 @@ export async function queryIssuingUtxos(tokenId:string){
       }
     }`);
   const variables = { tokenId: `\\x${tokenId}` }
-  return (await chaingraphClient.query(queryReqIssuingUtxos, variables)).data
+  const result = await readUnspentOutputs<UnspentTokenOutputs>({
+    endpoint: CHAINGRAPH_URL,
+    tokenId,
+    runQuery,
+    readWithRoot: (node) => runQuery(queryIssuingUtxosFromUnspentOutputs, { ...variables, node }),
+    readWithoutRoot: async () => await chaingraphClient.query(queryReqIssuingUtxos, variables),
+  })
+  return result.data
 }
 
 

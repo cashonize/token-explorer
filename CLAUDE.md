@@ -11,6 +11,7 @@ pnpm build        # Production build
 pnpm start        # Start production server
 pnpm lint         # Run ESLint
 pnpm typecheck    # Run TypeScript type checking (includes JSX/TSX)
+pnpm test         # Run unit tests (Vitest)
 ```
 
 ## Architecture Overview
@@ -59,6 +60,14 @@ Two data sources are merged in the UI:
 The `AuthchainTimeline` component in `AuthchainInfo.tsx` merges these by txHash, using migrations as the base and enriching with BCMR data. Pre-genesis migrations (from the funding tx) are filtered out using the genesis txHash.
 
 The `LatestPublicationOutput` component decodes the raw OP_RETURN hex from the latest metadata update migration, parsing it into BCMR data pushes (protocol prefix, content hash, URIs) per the BCMR spec.
+
+### Unspent Outputs Through `unspent_output`
+
+`queryAllTokenHolders` and `queryIssuingUtxos` read the unspent outputs of a token category. Chaingraph instances running the ParyonUSD fork have an `unspent_output(node_name)` query root that answers this from the node's own unspent set in milliseconds; the generic `output` query with a `_not: { spent_by }` filter takes seconds or times out for tokens with many outputs. `src/utils/unspentOutputRoot.ts` picks the query:
+
+- One request per endpoint checks the query root fields and node names. The answer is cached per endpoint URL and checked again after 5 minutes, after a failed generic query, and (as "no") when Hasura rejects `unspent_output`, in which case the query reruns with the generic version. This way a DNS switch to another instance heals itself.
+- The node is the one that accepts the token's category transaction (the transaction whose hash is the tokenId). With one node on the instance no lookup is needed. If no node accepts it, the generic query is used.
+- The `unspent_output` versions alias the root as `output`, so callers see the same result shape. Their `where` must filter `token_category`; that is what the function's indexes serve.
 
 ### Network Detection
 
