@@ -21,20 +21,58 @@
   token id). An instance with a single node needs no lookup. When no node accepts it, the explorer uses
   the generic query, which accepts a transaction seen by any node. Node lookups belong to one check, so
   they are redone with it. `unspent_output` returns no rows for a node name the instance doesn't have,
-  so each `unspent_output` query also asks for its node (UNSPENT_OUTPUT_NODE_FIELD); if the node isn't
-  there, the instance has changed, and the query runs again with the generic version.
+  so each `unspent_output` query also reads the instance's nodes (CHAINGRAPH_NODES_FIELD); if the node
+  isn't there, the instance has changed, and the query runs again with the generic version.
+
+  Paging (readUnspentOutputs): a paged query is read as one scan, with one query version and one node.
+  Pages are ordered by the creating transaction's `internal_id` (the order this instance stored
+  transactions in), then `output_index`, and each page asks for the outputs after the last one read
+  (AFTER_OUTPUT). An output joining or leaving the set behind that position doesn't move the outputs
+  still to be read, and a newly created output has a higher `internal_id`, so it comes after it.
+  `internal_id` means something only on one instance, so every page also reads the instance's nodes, and
+  a scan that sees them change, or has to switch to the generic version, starts again from the beginning.
+  A scan is not a snapshot: if a token moves while it runs, the old output may already have been read
+  and the new one is read later, so that amount is counted twice. Only tokens with more than one page of
+  unspent outputs are affected.
 */
 
 export const UNSPENT_OUTPUT_ROOT = "unspent_output"
 export const RECHECK_AFTER_MS = 5 * 60_000
 
-/** Root field to add to every `unspent_output` document (which must declare `$node: String!`). */
-export const UNSPENT_OUTPUT_NODE_FIELD = "unspent_output_node: node(where: { name: { _eq: $node } }) { name }"
+/**
+ * Root field for every `unspent_output` document and every paged document: the instance's nodes. The
+ * connection times tell two instances apart even when one was restored from the other's snapshot.
+ */
+export const CHAINGRAPH_NODES_FIELD =
+  "chaingraph_nodes: node(order_by: { internal_id: asc }) { name internal_id first_connected_at latest_connection_began_at }"
 
-/** The data UNSPENT_OUTPUT_NODE_FIELD adds: the node, or nothing when the instance doesn't have it. */
-export interface UnspentOutputNodeData {
-  unspent_output_node: { name: string }[]
+export interface ChaingraphNodesData {
+  chaingraph_nodes: { name: string }[]
 }
+
+/** Where a page starts: after this output, in (`transaction.internal_id`, `output_index`) order. */
+export interface OutputCursor {
+  internalId: string
+  outputIndex: string
+}
+
+/**
+ * The `where` condition for the outputs after `cursor`, passed as the `$after: output_bool_exp!` variable.
+ * The first page passes `{}`: through the `transaction` relationship the condition costs something for
+ * every candidate output, even when it is always true.
+ */
+export function outputsAfter(cursor: OutputCursor | undefined): Record<string, unknown> {
+  if (!cursor) return {}
+  return {
+    _or: [
+      { transaction: { internal_id: { _gt: cursor.internalId } } },
+      { transaction: { internal_id: { _eq: cursor.internalId } }, output_index: { _gt: cursor.outputIndex } },
+    ],
+  }
+}
+
+/** Order for paged documents, matching outputsAfter. */
+export const OUTPUT_KEY_ORDER = "[{ transaction: { internal_id: asc } }, { output_index: asc }]"
 
 export interface ChaingraphQueryResult<Data> {
   data?: Data
@@ -196,41 +234,106 @@ function isMissingUnspentOutputRoot(error: { message: string } | undefined) {
   return !!error && error.message.includes(UNSPENT_OUTPUT_ROOT) && /not found|no such|unexpected/i.test(error.message)
 }
 
-export interface UnspentOutputsRead<Data> {
+/** A row of a paged document: it selects `transaction { internal_id }` for the cursor. */
+export interface KeyedOutput {
+  output_index: string
+  transaction?: { internal_id: string } | null
+}
+
+export interface UnspentOutputsRead<Row extends KeyedOutput> {
   endpoint: string
   tokenId: string
   runQuery: ChaingraphQueryRunner
-  /** Reads through `unspent_output` for the given node, with UNSPENT_OUTPUT_NODE_FIELD in the document. */
-  readWithRoot: (nodeName: string) => Promise<ChaingraphQueryResult<Data & UnspentOutputNodeData>>
-  /** Reads through the generic `output` query. */
-  readWithoutRoot: () => Promise<ChaingraphQueryResult<Data>>
+  /** Rows per page of a paged query; without it the query is read once. A paged generic document has CHAINGRAPH_NODES_FIELD. */
+  pageSize?: number
+  /** Checked between pages: a superseded scan stops and returns neither data nor error. */
+  isCurrent?: () => boolean
+  /** Reads a page through `unspent_output` for the given node, with CHAINGRAPH_NODES_FIELD in the document. */
+  readWithRoot: (nodeName: string, after: OutputCursor | undefined) => Promise<ChaingraphQueryResult<{ output: Row[] } & ChaingraphNodesData>>
+  /** Reads a page through the generic `output` query. */
+  readWithoutRoot: (after: OutputCursor | undefined) => Promise<ChaingraphQueryResult<{ output: Row[] } & Partial<ChaingraphNodesData>>>
 }
 
-/** Reads unspent outputs of a token category through `unspent_output` when the endpoint has it, else the generic query. */
-export async function readUnspentOutputs<Data>(read: UnspentOutputsRead<Data>): Promise<ChaingraphQueryResult<Data>> {
-  const { endpoint, tokenId, runQuery } = read
-  const entry = checkCapabilities(endpoint, runQuery)
-  const capabilities = await entry.capabilities
-  if (capabilities.hasUnspentOutputRoot) {
-    const nodeName = await findNodeName(entry, tokenId, capabilities.nodeNames, runQuery)
-    if (nodeName) {
-      const result = await read.readWithRoot(nodeName)
-      if (result.data) {
-        const { unspent_output_node: node, ...data } = result.data
-        if (node.length > 0) return { data: data as Data }
-        // The instance behind the URL doesn't have this node (its rows would all be missing): check again next time
-        console.warn(`${endpoint} has no node ${nodeName}; using the generic query.`)
-        if (capabilitiesByEndpoint.get(endpoint) === entry) capabilitiesByEndpoint.delete(endpoint)
-      } else if (isMissingUnspentOutputRoot(result.error)) {
-        console.warn(`${endpoint} no longer has ${UNSPENT_OUTPUT_ROOT}; using the generic query.`)
-        markWithoutUnspentOutputRoot(endpoint)
-      } else {
-        return { error: result.error }
-      }
+type ScanOutcome<Row> =
+  | { kind: "rows", rows: Row[] }
+  | { kind: "error", error: { message: string } }
+  | { kind: "superseded" }
+  | { kind: "use generic query" }
+  | { kind: "instance changed" }
+
+// A scan starts again when the instance changes under it; past this many attempts the read fails
+const MAX_SCAN_ATTEMPTS = 3
+
+/**
+ * Reads all unspent outputs of a token category, through `unspent_output` when the endpoint has it, else
+ * the generic query, as one scan with one version and one node (see the comment at the top).
+ */
+export async function readUnspentOutputs<Row extends KeyedOutput>(read: UnspentOutputsRead<Row>): Promise<ChaingraphQueryResult<{ output: Row[] }>> {
+  const { endpoint, tokenId, runQuery, pageSize, isCurrent = () => true } = read
+  let mayUseRoot = true
+  for (let attempt = 1; attempt <= MAX_SCAN_ATTEMPTS; attempt++) {
+    const entry = checkCapabilities(endpoint, runQuery)
+    const capabilities = await entry.capabilities
+    const nodeName = mayUseRoot && capabilities.hasUnspentOutputRoot
+      ? await findNodeName(entry, tokenId, capabilities.nodeNames, runQuery)
+      : undefined
+    const outcome = await scan(read, entry, nodeName, pageSize, isCurrent)
+    switch (outcome.kind) {
+      case "rows": return { data: { output: outcome.rows } }
+      case "error": return { error: outcome.error }
+      case "superseded": return {}
+      // The rest of this read uses the generic version, even if a new check says otherwise
+      case "use generic query": mayUseRoot = false; break
+      case "instance changed": break
     }
   }
-  const result = await read.readWithoutRoot()
-  // A failed generic query may mean the instance changed; check again on the next query
-  if (result.error) capabilitiesByEndpoint.delete(endpoint)
-  return result
+  return { error: { message: `the Chaingraph instance at ${endpoint} changed during each of ${MAX_SCAN_ATTEMPTS} reads` } }
+}
+
+async function scan<Row extends KeyedOutput>(
+  read: UnspentOutputsRead<Row>,
+  entry: CachedCapabilities,
+  nodeName: string | undefined,
+  pageSize: number | undefined,
+  isCurrent: () => boolean
+): Promise<ScanOutcome<Row>> {
+  const { endpoint } = read
+  // Drops the cached check (unless a newer one replaced it), so the next read checks the instance again
+  const forgetCheck = () => { if (capabilitiesByEndpoint.get(endpoint) === entry) capabilitiesByEndpoint.delete(endpoint) }
+  let rows: Row[] = []
+  let cursor: OutputCursor | undefined
+  let instanceNodes: string | undefined
+  for (;;) {
+    if (cursor && !isCurrent()) return { kind: "superseded" }
+    const result = nodeName ? await read.readWithRoot(nodeName, cursor) : await read.readWithoutRoot(cursor)
+    if (!result.data) {
+      if (nodeName && isMissingUnspentOutputRoot(result.error)) {
+        console.warn(`${endpoint} no longer has ${UNSPENT_OUTPUT_ROOT}; using the generic query.`)
+        markWithoutUnspentOutputRoot(endpoint)
+        return { kind: "use generic query" }
+      }
+      // A failed generic query may mean the instance changed
+      if (!nodeName) forgetCheck()
+      return { kind: "error", error: result.error ?? { message: "no data received" } }
+    }
+    const nodes = result.data.chaingraph_nodes
+    if (nodeName && !nodes?.some(node => node.name === nodeName)) {
+      // The instance behind the URL doesn't have this node (its rows would all be missing)
+      console.warn(`${endpoint} has no node ${nodeName}; using the generic query.`)
+      forgetCheck()
+      return { kind: "use generic query" }
+    }
+    const pageInstanceNodes = JSON.stringify(nodes)
+    if (instanceNodes !== undefined && pageInstanceNodes !== instanceNodes) {
+      console.warn(`The Chaingraph instance at ${endpoint} changed while reading; reading again from the start.`)
+      forgetCheck()
+      return { kind: "instance changed" }
+    }
+    instanceNodes = pageInstanceNodes
+    rows = rows.concat(result.data.output)
+    const lastRow = result.data.output.at(-1)
+    if (pageSize === undefined || result.data.output.length < pageSize || !lastRow) return { kind: "rows", rows }
+    if (!lastRow.transaction) return { kind: "error", error: { message: "a paged row has no transaction internal_id" } }
+    cursor = { internalId: lastRow.transaction.internal_id, outputIndex: lastRow.output_index }
+  }
 }

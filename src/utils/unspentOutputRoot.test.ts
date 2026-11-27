@@ -4,8 +4,10 @@ import {
   forgetChaingraphCapabilities,
   readUnspentOutputs,
   type ChaingraphQueryResult,
+  type ChaingraphNodesData,
   type ChaingraphQueryRunner,
-  type UnspentOutputNodeData,
+  type KeyedOutput,
+  type OutputCursor,
 } from "./unspentOutputRoot"
 
 const endpoint = "https://chaingraph.example/v1/graphql"
@@ -55,20 +57,22 @@ function fakeInstance(instance: FakeInstance) {
   return { runQuery, requests }
 }
 
-// Reads that record which way the outputs were read
-interface Rows { source: string }
-const fromRoot = { data: { source: "unspent_output" } }
-const fromGeneric = { data: { source: "output" } }
+const rootRow = { output_index: "0", source: "unspent_output" }
+const genericRow = { output_index: "0", source: "output" }
+const fromRoot = { data: { output: [rootRow] } }
+const fromGeneric = { data: { output: [genericRow] } }
+type Row = typeof rootRow
+type Page = ChaingraphQueryResult<{ output: Row[] } & ChaingraphNodesData>
 
-// Reads that record which way the outputs were read. The unspent_output read answers like an instance
-// that has the nodes `instance.nodeNames`, or fails with `withRootError`.
+// Single-page reads that record which way the outputs were read. The unspent_output read answers
+// like an instance that has the nodes `instance.nodeNames`, or fails with `withRootError`.
 function fakeReads({ withRootError, instance }: { withRootError?: { message: string }, instance?: FakeInstance } = {}) {
-  const readWithRoot = vi.fn<(nodeName: string) => Promise<ChaingraphQueryResult<Rows & UnspentOutputNodeData>>>(nodeName => {
+  const readWithRoot = vi.fn<(nodeName: string, after: OutputCursor | undefined) => Promise<Page>>(nodeName => {
     if (withRootError) return Promise.resolve({ error: withRootError })
-    const hasNode = !instance || instance.nodeNames.includes(nodeName)
-    return Promise.resolve({ data: { source: "unspent_output", unspent_output_node: hasNode ? [{ name: nodeName }] : [] } })
+    const nodeNames = instance?.nodeNames ?? [nodeName]
+    return Promise.resolve({ data: { output: [rootRow], chaingraph_nodes: nodeNames.map(name => ({ name })) } })
   })
-  const readWithoutRoot = vi.fn<() => Promise<ChaingraphQueryResult<Rows>>>(() => Promise.resolve(fromGeneric))
+  const readWithoutRoot = vi.fn<(after: OutputCursor | undefined) => Promise<ChaingraphQueryResult<{ output: Row[] }>>>(() => Promise.resolve(fromGeneric))
   return { readWithRoot, readWithoutRoot }
 }
 
@@ -92,7 +96,7 @@ describe("readUnspentOutputs", () => {
     expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromRoot)
     expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromRoot)
 
-    expect(reads.readWithRoot).toHaveBeenCalledWith("bchn-mainnet")
+    expect(reads.readWithRoot).toHaveBeenCalledWith("bchn-mainnet", undefined)
     expect(reads.readWithoutRoot).not.toHaveBeenCalled()
     expect(requests).toEqual({ capabilityChecks: 1, nodeLookups: 0 })
   })
@@ -109,7 +113,7 @@ describe("readUnspentOutputs", () => {
     await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })
 
     expect(reads.readWithRoot).toHaveBeenCalledTimes(2)
-    expect(reads.readWithRoot).toHaveBeenNthCalledWith(1, "bchn-chipnet")
+    expect(reads.readWithRoot).toHaveBeenNthCalledWith(1, "bchn-chipnet", undefined)
     expect(requests).toEqual({ capabilityChecks: 1, nodeLookups: 1 })
   })
 
@@ -123,7 +127,7 @@ describe("readUnspentOutputs", () => {
 
     await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })
 
-    expect(reads.readWithRoot).toHaveBeenCalledWith("bchn-mainnet")
+    expect(reads.readWithRoot).toHaveBeenCalledWith("bchn-mainnet", undefined)
   })
 
   it("uses the generic query when no node accepts the token's category transaction", async () => {
@@ -143,7 +147,7 @@ describe("readUnspentOutputs", () => {
     instance.acceptedInMempoolBy = ["bchn-mainnet"]
 
     expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromRoot)
-    expect(reads.readWithRoot).toHaveBeenCalledWith("bchn-mainnet")
+    expect(reads.readWithRoot).toHaveBeenCalledWith("bchn-mainnet", undefined)
     expect(requests).toEqual({ capabilityChecks: 1, nodeLookups: 2 })
   })
 
@@ -158,7 +162,7 @@ describe("readUnspentOutputs", () => {
     vi.setSystemTime(Date.now() + RECHECK_AFTER_MS + 1000)
 
     expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromRoot)
-    expect(reads.readWithRoot.mock.calls).toEqual([["bchn-mainnet"], ["mainnet"]])
+    expect(reads.readWithRoot.mock.calls).toEqual([["bchn-mainnet", undefined], ["mainnet", undefined]])
     expect(requests).toEqual({ capabilityChecks: 2, nodeLookups: 2 })
   })
 
@@ -173,7 +177,7 @@ describe("readUnspentOutputs", () => {
 
     expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromGeneric)
     expect(await readUnspentOutputs({ endpoint, tokenId, runQuery, ...reads })).toEqual(fromRoot)
-    expect(reads.readWithRoot.mock.calls).toEqual([["bchn-mainnet"], ["bchn-mainnet"], ["mainnet"]])
+    expect(reads.readWithRoot.mock.calls).toEqual([["bchn-mainnet", undefined], ["bchn-mainnet", undefined], ["mainnet", undefined]])
     expect(requests).toEqual({ capabilityChecks: 2, nodeLookups: 2 })
   })
 
@@ -259,5 +263,147 @@ describe("readUnspentOutputs", () => {
       .toEqual(fromRoot)
     expect(await readUnspentOutputs({ endpoint: "https://other.example/v1/graphql", tokenId, runQuery: withoutRoot.runQuery, ...reads }))
       .toEqual(fromGeneric)
+  })
+})
+
+// A paged fake: outputs keyed by (internal_id, output_index), served in key order after a cursor, two per page
+interface FakeOutput extends KeyedOutput {
+  transaction: { internal_id: string }
+  label: string
+}
+
+function fakeOutput(internalId: number, outputIndex: number): FakeOutput {
+  return { output_index: String(outputIndex), transaction: { internal_id: String(internalId) }, label: `${internalId}:${outputIndex}` }
+}
+
+function pagedServer(outputs: FakeOutput[], nodeNames = ["bchn-mainnet"]) {
+  const state = { outputs, nodeNames }
+  const key = (output: FakeOutput) => [BigInt(output.transaction.internal_id), BigInt(output.output_index)] as const
+  const isAfter = (output: FakeOutput, cursor: OutputCursor | undefined) => {
+    if (!cursor) return true
+    const [internalId, outputIndex] = key(output)
+    return internalId > BigInt(cursor.internalId) || (internalId === BigInt(cursor.internalId) && outputIndex > BigInt(cursor.outputIndex))
+  }
+  const page = (after: OutputCursor | undefined) => {
+    const sorted = [...state.outputs].sort((a, b) => {
+      const [aId, aIndex] = key(a), [bId, bIndex] = key(b)
+      return aId === bId ? Number(aIndex - bIndex) : Number(aId - bId)
+    })
+    return {
+      data: {
+        output: sorted.filter(output => isAfter(output, after)).slice(0, 2),
+        chaingraph_nodes: state.nodeNames.map(name => ({ name })),
+      },
+    }
+  }
+  return { state, page }
+}
+
+const labels = (result: ChaingraphQueryResult<{ output: FakeOutput[] }>) => result.data?.output.map(output => output.label)
+
+describe("readUnspentOutputs paging", () => {
+  it("asks each page for the outputs after the last one read", async () => {
+    const { runQuery } = fakeInstance({ hasRoot: true, nodeNames: ["bchn-mainnet"] })
+    const server = pagedServer([fakeOutput(5, 0), fakeOutput(5, 1), fakeOutput(7, 0), fakeOutput(9, 2), fakeOutput(9, 3)])
+    const readWithRoot = vi.fn((_nodeName: string, after: OutputCursor | undefined) => Promise.resolve(server.page(after)))
+    const readWithoutRoot = vi.fn((after: OutputCursor | undefined) => Promise.resolve(server.page(after)))
+
+    const result = await readUnspentOutputs({ endpoint, tokenId, runQuery, pageSize: 2, readWithRoot, readWithoutRoot })
+
+    expect(labels(result)).toEqual(["5:0", "5:1", "7:0", "9:2", "9:3"])
+    expect(readWithRoot.mock.calls.map(([, after]) => after)).toEqual([
+      undefined,
+      { internalId: "5", outputIndex: "1" },
+      { internalId: "9", outputIndex: "2" },
+    ])
+    expect(readWithoutRoot).not.toHaveBeenCalled()
+  })
+
+  it("neither repeats nor skips outputs when earlier outputs join or leave the set during the scan", async () => {
+    const { runQuery } = fakeInstance({ hasRoot: true, nodeNames: ["bchn-mainnet"] })
+    const server = pagedServer([fakeOutput(5, 0), fakeOutput(6, 0), fakeOutput(7, 0), fakeOutput(8, 0), fakeOutput(9, 0)])
+    const readWithRoot = vi.fn((_nodeName: string, after: OutputCursor | undefined) => {
+      const answer = server.page(after)
+      if (!after) {
+        // After the first page: an output already read is spent, an older transaction's output joins
+        // behind the cursor, and a new transaction creates an output (a higher internal_id)
+        server.state.outputs = [fakeOutput(1, 0), ...server.state.outputs.filter(output => output.label !== "5:0"), fakeOutput(10, 0)]
+      }
+      return Promise.resolve(answer)
+    })
+    const readWithoutRoot = vi.fn(() => Promise.resolve({}))
+
+    const result = await readUnspentOutputs({ endpoint, tokenId, runQuery, pageSize: 2, readWithRoot, readWithoutRoot })
+
+    // The unchanged outputs come once each; the spent one stays as read, the one behind the cursor is not read
+    expect(labels(result)).toEqual(["5:0", "6:0", "7:0", "8:0", "9:0", "10:0"])
+  })
+
+  it("starts again from the beginning with the generic query when unspent_output is rejected partway", async () => {
+    const { runQuery } = fakeInstance({ hasRoot: true, nodeNames: ["bchn-mainnet"] })
+    const server = pagedServer([fakeOutput(5, 0), fakeOutput(6, 0), fakeOutput(7, 0)])
+    const readWithRoot = vi.fn((_nodeName: string, after: OutputCursor | undefined) =>
+      Promise.resolve(after ? { error: missingRootError } : server.page(after)))
+    const readWithoutRoot = vi.fn((after: OutputCursor | undefined) => Promise.resolve(server.page(after)))
+
+    const result = await readUnspentOutputs({ endpoint, tokenId, runQuery, pageSize: 2, readWithRoot, readWithoutRoot })
+
+    expect(labels(result)).toEqual(["5:0", "6:0", "7:0"])
+    expect(readWithoutRoot.mock.calls.map(([after]) => after)).toEqual([undefined, { internalId: "6", outputIndex: "0" }])
+  })
+
+  it("starts again with the generic query when the node is gone partway", async () => {
+    const { runQuery } = fakeInstance({ hasRoot: true, nodeNames: ["bchn-mainnet"] })
+    const server = pagedServer([fakeOutput(5, 0), fakeOutput(6, 0), fakeOutput(7, 0)])
+    const readWithRoot = vi.fn((_nodeName: string, after: OutputCursor | undefined) => {
+      const answer = server.page(after)
+      server.state.nodeNames = ["mainnet"]
+      return Promise.resolve(answer)
+    })
+    const readWithoutRoot = vi.fn((after: OutputCursor | undefined) => Promise.resolve(server.page(after)))
+
+    const result = await readUnspentOutputs({ endpoint, tokenId, runQuery, pageSize: 2, readWithRoot, readWithoutRoot })
+
+    expect(labels(result)).toEqual(["5:0", "6:0", "7:0"])
+    expect(readWithRoot).toHaveBeenCalledTimes(2)
+    expect(readWithoutRoot.mock.calls[0]).toEqual([undefined])
+  })
+
+  it("starts again from the beginning when the instance changes partway, and gives up if it keeps changing", async () => {
+    const { runQuery } = fakeInstance({ hasRoot: false, nodeNames: ["bchn-mainnet"] })
+    const server = pagedServer([fakeOutput(5, 0), fakeOutput(6, 0), fakeOutput(7, 0)])
+    let instanceChanges = 1
+    const readWithoutRoot = vi.fn((after: OutputCursor | undefined) => {
+      const answer = server.page(after)
+      if (after && instanceChanges > 0) {
+        instanceChanges -= 1
+        answer.data.chaingraph_nodes = [{ name: "bchn-mainnet (another instance)" }]
+      }
+      return Promise.resolve(answer)
+    })
+    const readWithRoot = vi.fn(() => Promise.resolve({}))
+
+    const result = await readUnspentOutputs({ endpoint, tokenId, runQuery, pageSize: 2, readWithRoot, readWithoutRoot })
+    expect(labels(result)).toEqual(["5:0", "6:0", "7:0"])
+    expect(readWithoutRoot.mock.calls.map(([after]) => after)).toEqual([
+      undefined, { internalId: "6", outputIndex: "0" },
+      undefined, { internalId: "6", outputIndex: "0" },
+    ])
+
+    instanceChanges = Infinity
+    const keepsChanging = await readUnspentOutputs({ endpoint, tokenId, runQuery, pageSize: 2, readWithRoot, readWithoutRoot })
+    expect(keepsChanging.error?.message).toContain("changed")
+  })
+
+  it("stops between pages once the search is superseded", async () => {
+    const { runQuery } = fakeInstance({ hasRoot: true, nodeNames: ["bchn-mainnet"] })
+    const server = pagedServer([fakeOutput(5, 0), fakeOutput(6, 0), fakeOutput(7, 0)])
+    const readWithRoot = vi.fn((_nodeName: string, after: OutputCursor | undefined) => Promise.resolve(server.page(after)))
+    const readWithoutRoot = vi.fn(() => Promise.resolve({}))
+
+    const result = await readUnspentOutputs({ endpoint, tokenId, runQuery, pageSize: 2, readWithRoot, readWithoutRoot, isCurrent: () => false })
+
+    expect(result).toEqual({})
+    expect(readWithRoot).toHaveBeenCalledTimes(1)
   })
 })

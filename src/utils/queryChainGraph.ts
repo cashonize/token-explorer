@@ -2,39 +2,47 @@ import { graphql, ChaingraphClient } from "chaingraph-ts";
 import { CHAINGRAPH_URL, TOKENBURNER_LOCKING_BYTECODE } from "@/constants";
 import type { AuthchainEntry, BurnEntry, BurnMethod } from "@/interfaces";
 import { isBcmrOutput, parseBcmrPublication } from "./bcmr";
-import { readUnspentOutputs, UNSPENT_OUTPUT_NODE_FIELD, type ChaingraphQueryRunner, type UnspentOutputNodeData } from "./unspentOutputRoot";
+import { readUnspentOutputs, outputsAfter, CHAINGRAPH_NODES_FIELD, OUTPUT_KEY_ORDER, type ChaingraphNodesData, type ChaingraphQueryRunner } from "./unspentOutputRoot";
 
 const chaingraphClient = new ChaingraphClient(CHAINGRAPH_URL);
 
 const runQuery: ChaingraphQueryRunner = async (document, variables) =>
   await chaingraphClient.query(document, variables)
 
-// Result shape shared by the generic `output` queries and their `unspent_output` versions below
+// Result shape shared by the generic `output` queries and their `unspent_output` versions below;
+// the paged holder query also selects `transaction { internal_id }` for its cursor
 export interface UnspentTokenOutput {
   transaction_hash: string
   output_index: string
   locking_bytecode: string
   fungible_token_amount: string | null
   nonfungible_token_capability: "none" | "mutable" | "minting" | null
+  transaction?: { internal_id: string } | null
 }
 
 interface UnspentTokenOutputs {
   output: UnspentTokenOutput[]
 }
 
+// Chaingraph caps `output` at 5000 rows per query; the holder query reads pages of that size
+// after a cursor (see "Paging" in unspentOutputRoot.ts)
+const HOLDER_PAGE_SIZE = 5000
+
 // The `unspent_output` versions are plain strings: the chaingraph-ts schema types don't include that root.
 // Aliasing it as `output` keeps the result shape of the generic queries.
 const queryTotalSupplyFromUnspentOutputs = `query TotalSupplyFTUnspent (
-  $offset: Int,
+  $limit: Int,
+  $after: output_bool_exp!,
   $tokenId: bytea,
   $node: String!
 ) {
-    ${UNSPENT_OUTPUT_NODE_FIELD}
+    ${CHAINGRAPH_NODES_FIELD}
     output: unspent_output(
       args: { node_name: $node }
-      offset: $offset
-      limit: 5000
+      limit: $limit
+      order_by: ${OUTPUT_KEY_ORDER}
       where: {
+        _and: [$after]
         token_category: { _eq: $tokenId }
         locking_bytecode_pattern: { _neq: "6a" }
       }
@@ -44,6 +52,9 @@ const queryTotalSupplyFromUnspentOutputs = `query TotalSupplyFTUnspent (
       locking_bytecode
       fungible_token_amount
       nonfungible_token_capability
+      transaction {
+        internal_id
+      }
     }
   }`
 
@@ -51,7 +62,7 @@ const queryIssuingUtxosFromUnspentOutputs = `query IssuingUtxosUnspent (
   $tokenId: bytea,
   $node: String!
 ) {
-    ${UNSPENT_OUTPUT_NODE_FIELD}
+    ${CHAINGRAPH_NODES_FIELD}
     output: unspent_output(
       args: { node_name: $node }
       where: {
@@ -96,15 +107,28 @@ export async function queryGenesisInfo(tokenId:string){
   return (await chaingraphClient.query(queryReqGenesisSupply, variables)).data
 }
 
-export async function queryAllTokenHolders(tokenId:string, offset:number = 0){
+/**
+ * All unspent token outputs of the category (except bare OP_RETURNs), read page by page as one scan
+ * (see "Paging" in unspentOutputRoot.ts). Stops early, without data, once `isCurrent()` turns false.
+ */
+export async function queryAllTokenHolders(tokenId:string, isCurrent?: () => boolean){
+  // chaingraph_nodes and the order are CHAINGRAPH_NODES_FIELD and OUTPUT_KEY_ORDER, written out for the types
   const queryReqTotalSupply = graphql(`query TotalSupplyFT (
-    $offset: Int,
+    $limit: Int,
+    $after: output_bool_exp!,
     $tokenId: bytea
   ) {
+      chaingraph_nodes: node(order_by: { internal_id: asc }) {
+        name
+        internal_id
+        first_connected_at
+        latest_connection_began_at
+      }
       output(
-        offset: $offset
-        limit: 5000
+        limit: $limit
+        order_by: [{ transaction: { internal_id: asc } }, { output_index: asc }]
         where: {
+          _and: [$after]
           token_category: { _eq: $tokenId }
           locking_bytecode_pattern: { _neq: "6a" }
           transaction: { _or: [
@@ -125,15 +149,21 @@ export async function queryAllTokenHolders(tokenId:string, offset:number = 0){
         locking_bytecode
         fungible_token_amount
         nonfungible_token_capability
+        transaction {
+          internal_id
+        }
       }
     }`);
-  const variables = { tokenId: `\\x${tokenId}`, offset }
-  const result = await readUnspentOutputs<UnspentTokenOutputs>({
+  const variables = { tokenId: `\\x${tokenId}`, limit: HOLDER_PAGE_SIZE }
+  const result = await readUnspentOutputs<UnspentTokenOutput>({
     endpoint: CHAINGRAPH_URL,
     tokenId,
     runQuery,
-    readWithRoot: (node) => runQuery<UnspentTokenOutputs & UnspentOutputNodeData>(queryTotalSupplyFromUnspentOutputs, { ...variables, node }),
-    readWithoutRoot: async () => await chaingraphClient.query(queryReqTotalSupply, variables),
+    pageSize: HOLDER_PAGE_SIZE,
+    isCurrent,
+    readWithRoot: (node, after) =>
+      runQuery<UnspentTokenOutputs & ChaingraphNodesData>(queryTotalSupplyFromUnspentOutputs, { ...variables, after: outputsAfter(after), node }),
+    readWithoutRoot: async (after) => await chaingraphClient.query(queryReqTotalSupply, { ...variables, after: outputsAfter(after) }),
   })
   return result.data
 }
@@ -167,11 +197,11 @@ export async function queryIssuingUtxos(tokenId:string){
       }
     }`);
   const variables = { tokenId: `\\x${tokenId}` }
-  const result = await readUnspentOutputs<UnspentTokenOutputs>({
+  const result = await readUnspentOutputs<UnspentTokenOutput>({
     endpoint: CHAINGRAPH_URL,
     tokenId,
     runQuery,
-    readWithRoot: (node) => runQuery<UnspentTokenOutputs & UnspentOutputNodeData>(queryIssuingUtxosFromUnspentOutputs, { ...variables, node }),
+    readWithRoot: (node) => runQuery<UnspentTokenOutputs & ChaingraphNodesData>(queryIssuingUtxosFromUnspentOutputs, { ...variables, node }),
     readWithoutRoot: async () => await chaingraphClient.query(queryReqIssuingUtxos, variables),
   })
   return result.data
